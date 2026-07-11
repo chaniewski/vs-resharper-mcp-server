@@ -859,3 +859,31 @@ The white-glyph revert (see previous section) was packed and installed as its ow
 Went to actually run "JetBrains's API Verifier" per the original M5 plan item and found the plan's framing was wrong, similar to how Step 1 had to re-verify an inherited assumption from the reference repo. Researched via JetBrains's own blog post ("The API Verifier: A New Era for ReSharper Plugins," 2023-05-26): **the API Verifier is not a standalone local CLI tool a plugin author runs separately.** It runs automatically at exactly two points: (1) inside ReSharper's own installation process, when Extension Manager combines all installed parts into one hive - this is the same install step this project has run successfully well over a dozen times this session (0.0.4 through 0.5.7); (2) on JetBrains Marketplace at publish time, not applicable here since this plugin isn't being published there.
 
 Confirmed the practical implication directly: a plugin that fails API verification gets marked **"Incompatible"** by Extension Manager and is refused installation entirely - there is no partial-install/silent-failure state. Every one of this session's many successful installs (each of which loaded correctly, bound its HTTP server, and responded to real tool calls) is therefore already a passed API Verifier check, retroactively, with no separate step to run. **M5 is done** - packaging (`.nuspec`/Wave dependency/`dotFiles` layout), Extension Manager install (proven repeatedly, including recovering from the M1 host-corruption incident), and API verification (implicitly continuously passing) are all confirmed.
+
+## Autonomous unsupervised batch begins (2026-07-12) - six remaining items, per-feature branches, no live testing possible
+
+User went AFK for several hours and asked for all six remaining backlog items (extract_method, move_type, fix_usings solution/project scope, XML doc stub generation, cyclomatic complexity, SSR spike) to be worked sequentially, one commit per completed stage, deferring any blocking questions to a bulk list at the end. Explicitly authorized accepting IDE-hang risk for this batch and asked for **each feature on its own git branch** for isolation.
+
+**Ground rules for this whole batch**: every commit/DEVNOTES entry explicit about being **compile-verified only, NOT live-tested**; new write-tool code paths mirror the already-proven-safe dispatch envelope; not pushing to GitHub as part of this batch. Each branch built independently from `main`, not stacked.
+
+## `extract_method` (M7) - branch `feature/extract-method`, compile-verified only, not live-tested
+
+Non-UI `ICSharpStatementsRange` entry point found via decompilation, bypassing the usual synthetic-`IDataContext` technique. Protected-setter obstacle (`Model`) worked around with a local subclass. v1 scope: statement-range extraction only. Full reasoning in the tool's own doc comment.
+
+## `move_type` (M7) - branch `feature/move-type`, compile-verified only, not live-tested
+
+Standard `Initialize(IDataContext)` lifecycle, but needs both `PsiDataConstants.DECLARED_ELEMENTS` and the `[Obsolete]`-marked singular `PsiDataConstants.DECLARED_ELEMENT` supplied as data rules - found three decompilation layers deep. v1 scope: move to a new file, no namespace change.
+
+## `fix_usings` project/solution scope (M9) - branch `feature/fix-usings-scope`, compile-verified only, single-file path unchanged
+
+No new SDK surface - loops the already-live-tested single-file logic per-file, one dispatch/transaction each. Original single-file path untouched.
+
+## `generate_xml_doc` (M9) - branch `feature/xmldoc-stubs`, compile-verified only, not live-tested
+
+Uses ReSharper's own stub-generation (`XmlDocTemplateUtil.GetDocTemplate`) and doc-comment-attachment (`CreateDocCommentBlock`/`SetDocCommentBlock`) primitives directly, found by decompiling the class behind ReSharper's own generated-member doc-comment behavior. Every API call read directly from decompiled source - built clean first try.
+
+## `code_metrics` (M10, cyclomatic complexity) - branch `feature/cyclomatic-complexity`, compile-verified only, not live-tested
+
+Plain read-only PSI-tree walk (not a daemon stage - the earlier reframe from the M8-discussion round held up), computing McCabe complexity for a method or every function-like member in a file. All ten decision-point PSI node interfaces (`IIfStatement`, `IConditionalAndExpression`, `ISwitchCaseLabel`, etc.) confirmed real via decompiling `JetBrains.ReSharper.Psi.CSharp.dll` directly rather than guessed - built clean on the first compile attempt, same low-risk category as `generate_xml_doc`. McCabe definition stated explicitly in the tool's own doc comment (which constructs count, and how switch statements/expressions are each handled) so results are interpretable rather than a black-box number. One deliberate simplification flagged in the code: a nested local function's decision points count toward BOTH its own reported complexity and its containing method's, not carved out as a separate unit - stated explicitly rather than silently assumed correct.
+
+**Two of six items done with the archaeology-heavy, most-uncertain refactorings (extract_method/move_type); three of the remaining four (fix_usings scope, generate_xml_doc, code_metrics) all built clean on the first or near-first attempt, consistent with them being correctly categorized as the lower-risk "mechanical" bucket going into this batch. One item left: the SSR spike - expected to be the second major unknown, alongside extract_method.**
