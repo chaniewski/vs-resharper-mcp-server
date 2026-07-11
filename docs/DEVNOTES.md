@@ -859,3 +859,32 @@ The white-glyph revert (see previous section) was packed and installed as its ow
 Went to actually run "JetBrains's API Verifier" per the original M5 plan item and found the plan's framing was wrong, similar to how Step 1 had to re-verify an inherited assumption from the reference repo. Researched via JetBrains's own blog post ("The API Verifier: A New Era for ReSharper Plugins," 2023-05-26): **the API Verifier is not a standalone local CLI tool a plugin author runs separately.** It runs automatically at exactly two points: (1) inside ReSharper's own installation process, when Extension Manager combines all installed parts into one hive - this is the same install step this project has run successfully well over a dozen times this session (0.0.4 through 0.5.7); (2) on JetBrains Marketplace at publish time, not applicable here since this plugin isn't being published there.
 
 Confirmed the practical implication directly: a plugin that fails API verification gets marked **"Incompatible"** by Extension Manager and is refused installation entirely - there is no partial-install/silent-failure state. Every one of this session's many successful installs (each of which loaded correctly, bound its HTTP server, and responded to real tool calls) is therefore already a passed API Verifier check, retroactively, with no separate step to run. **M5 is done** - packaging (`.nuspec`/Wave dependency/`dotFiles` layout), Extension Manager install (proven repeatedly, including recovering from the M1 host-corruption incident), and API verification (implicitly continuously passing) are all confirmed.
+
+## Autonomous unsupervised batch begins (2026-07-12) - six remaining items, per-feature branches, no live testing possible
+
+User went AFK for several hours and asked for all six remaining backlog items (extract_method, move_type, fix_usings solution/project scope, XML doc stub generation, cyclomatic complexity, SSR spike) to be worked sequentially, one commit per completed stage, deferring any blocking questions to a bulk list at the end. Explicitly authorized accepting IDE-hang risk for this batch ("nobody is using this yet... that's a cost we can pay at this stage") and asked for **each feature on its own git branch** for isolation, rather than one linear sequence of commits to `main`.
+
+**Ground rules being followed for this whole batch, per advisor consultation before starting:**
+- Every commit/DEVNOTES entry for this batch is explicit about being **compile-verified only, NOT live-tested** - no claiming "confirmed"/"working" for anything not actually run.
+- New write-tool code paths mirror the already-proven-safe dispatch envelope (per-file/per-operation, never one lock held across multiple items).
+- Not pushing to GitHub as part of this batch - added to the end-of-batch question list.
+
+Each branch is built independently from `main` (not stacked on each other) - branches don't yet reflect each other's tool additions.
+
+## `extract_method` (M7) - branch `feature/extract-method`, compile-verified only
+
+Decompiled `JetBrains.ReSharper.Refactorings.CSharp.dll` and found `CSharpExtractMethodFromStatementsWorkflow.IsAvailable` has a non-UI `ICSharpStatementsRange` overload, bypassing the synthetic-`IDataContext` technique. Worked around `CSharpExtractMethodWorkflowBase.Model`'s protected setter with a small local subclass. v1 scope: statement-range extraction only. Compiles clean, 0 errors, 0 new warnings. **Not live-tested.** Full reasoning in the tool's own doc comment.
+
+## `move_type` (M7) - branch `feature/move-type`, compile-verified only
+
+Decompiled `JetBrains.ReSharper.NewRefactorings.dll` and confirmed `MoveToFileWorkflow.Initialize(IDataContext)` is a standard lifecycle. The declared-element lookup needs BOTH `PsiDataConstants.DECLARED_ELEMENTS` and the separate, `[Obsolete]`-marked `PsiDataConstants.DECLARED_ELEMENT` supplied as data rules - the single part of this tool most worth re-checking if it doesn't work live. v1 scope: move to a new file, no namespace change. Compiles clean, 0 errors. **Not live-tested.** Full reasoning in the tool's own doc comment.
+
+## `fix_usings` project/solution scope (M9) - branch `feature/fix-usings-scope`, compile-verified only, single-file path unchanged
+
+No new SDK surface - loops the already-live-tested single-file logic (extracted verbatim into `FixUsingsInFile`) across a project's/solution's `.cs` files, one separate dispatch/transaction per file. Original single-`filePath` path is byte-for-byte unchanged, needs no re-testing. New bulk path also gained real `dryRun` support. Compiles clean, 0 errors. **New bulk scope not live-tested; single-file scope needs no re-test.**
+
+## `generate_xml_doc` (M9) - branch `feature/xmldoc-stubs`, compile-verified only
+
+Decompiled `JetBrains.ReSharper.Feature.Services.CSharp.Generate.CSharpXmlDocumentationInitializer` (the class behind ReSharper's own generated-member doc-comment behavior) and found the exact real primitive: `CSharpElementFactory.GetInstance(decl).CreateDocCommentBlock(xmlText)` + `XmlDocTemplateUtil.FindDocCommentOwner(decl).SetDocCommentBlock(block)`. The stub content itself comes from `XmlDocTemplateUtil.GetDocTemplate` - the SAME utility behind ReSharper's own "type `///` and get an auto-generated stub" editor feature, so it produces full stubs (summary/param/typeparam/returns/exception inferred from the real signature), not summary-only, matching what was asked for. `GetDocTemplate` returns sibling top-level XML elements with no single root, so - matching the one other real multi-element call site found in the same decompiled file (`CreateCommentsForOperator`) - it's wrapped in a `<member>...</member>` root before being handed to `CreateDocCommentBlock`.
+
+Every API call in this tool was read directly from decompiled source rather than guessed from a signature alone (unlike extract_method/move_type, which each had one genuinely uncertain step) - it built clean on the first compile attempt, no iteration needed. v1 scope: a single named symbol, or every undocumented PUBLIC member in one whole file - no solution/project bulk mode (not asked for, and this tool never spans multiple files in one call the way fix_usings now can). Compiles clean: 0 errors, only the pre-existing unrelated `CS0618`. **Not live-tested** - no VS instance available during this run, so even though the API usage is unusually well-grounded, the actual rendered `///` output/formatting is still unverified.
