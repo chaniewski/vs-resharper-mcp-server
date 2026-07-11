@@ -15,9 +15,11 @@ namespace XC.VsResharperMcpServer.Host
 {
     // Per-solution. Constructs ISolution-bound tool instances and adds them to the single
     // process-wide MCP server's ToolCollection (owned by McpShellComponent) on solution open;
-    // removes them on solution close. 26 tools total: 15 read (M2+M3) + 7 write (M4) +
+    // removes them on solution close. 27 tools total on this branch: 15 read (M2+M3) + 7 write (M4) +
     // sync_file_from_disk + list_solutions + 2 refactorings beyond rename (M7: inline_variable,
-    // change_signature). safe_delete was implemented then dropped - see docs/DEVNOTES.md
+    // change_signature) + generate_xml_doc (M9 - NOT LIVE-TESTED, see docs/DEVNOTES.md). Branched from
+    // main before extract_method/move_type/fix_usings-scope (sibling M7/M9 branches) - none of these
+    // are merged together yet. safe_delete was implemented then dropped - see docs/DEVNOTES.md
     // "safe_delete dropped" entry.
     //
     // Also where the HTTP server's port actually gets bound (McpShellComponent.EnsureStarted) -
@@ -86,6 +88,7 @@ namespace XC.VsResharperMcpServer.Host
             var syncFileFromDisk = new SyncFileFromDiskTool(solution, shellLocks);
             var inlineVariable = new InlineVariableTool(solution, shellLocks, dataContexts, textControlManager);
             var changeSignature = new ChangeSignatureTool(solution, shellLocks);
+            var generateXmlDoc = new GenerateXmlDocTool(solution, shellLocks);
 
             _registeredTools = new[]
             {
@@ -294,6 +297,17 @@ namespace XC.VsResharperMcpServer.Host
                             "in the method body is NOT reported as a conflict and will leave a compile error " +
                             "there - after removing a parameter, check the method body yourself (e.g. via " +
                             "get_diagnostics/get_file_errors) rather than trusting a clean '(applied)' result."
+                    }),
+                McpServerTool.Create((Func<string, string, string, int, int, bool, bool, string>)generateXmlDoc.Execute,
+                    new McpServerToolCreateOptions
+                    {
+                        Name = "generate_xml_doc",
+                        Description = "WRITE, NOT LIVE-TESTED YET (see docs/DEVNOTES.md): generate an XML doc " +
+                            "comment stub (<summary>/<param>/<typeparam>/<returns>/<exception>, following " +
+                            "ReSharper's own template for the declaration's actual signature) for an undocumented " +
+                            "symbol. Provide either a symbolName or a file path with position for a single symbol, " +
+                            "OR set scanWholeFile=true with just 'filePath' to stub every undocumented PUBLIC " +
+                            "member in that file. Already-documented symbols are skipped unless overwrite=true."
                     }),
                 McpServerTool.Create((Func<string, string[], string>)syncFileFromDisk.Execute,
                     new McpServerToolCreateOptions
