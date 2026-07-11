@@ -15,10 +15,12 @@ namespace XC.VsResharperMcpServer.Host
 {
     // Per-solution. Constructs ISolution-bound tool instances and adds them to the single
     // process-wide MCP server's ToolCollection (owned by McpShellComponent) on solution open;
-    // removes them on solution close. 26 tools total: 15 read (M2+M3) + 7 write (M4) +
+    // removes them on solution close. 27 tools total on this branch: 15 read (M2+M3) + 7 write (M4) +
     // sync_file_from_disk + list_solutions + 2 refactorings beyond rename (M7: inline_variable,
-    // change_signature). safe_delete was implemented then dropped - see docs/DEVNOTES.md
-    // "safe_delete dropped" entry.
+    // change_signature) + code_metrics (M10 - NOT LIVE-TESTED, see docs/DEVNOTES.md). Branched from
+    // main before extract_method/move_type/fix_usings-scope/generate_xml_doc (sibling M7/M9 branches) -
+    // none of these are merged together yet. safe_delete was implemented then dropped - see
+    // docs/DEVNOTES.md "safe_delete dropped" entry.
     //
     // Also where the HTTP server's port actually gets bound (McpShellComponent.EnsureStarted) -
     // deliberately deferred to here (not eager at shell-construction time) so this solution's
@@ -86,6 +88,7 @@ namespace XC.VsResharperMcpServer.Host
             var syncFileFromDisk = new SyncFileFromDiskTool(solution, shellLocks);
             var inlineVariable = new InlineVariableTool(solution, shellLocks, dataContexts, textControlManager);
             var changeSignature = new ChangeSignatureTool(solution, shellLocks);
+            var codeMetrics = new CodeMetricsTool(solution, shellLocks);
 
             _registeredTools = new[]
             {
@@ -294,6 +297,17 @@ namespace XC.VsResharperMcpServer.Host
                             "in the method body is NOT reported as a conflict and will leave a compile error " +
                             "there - after removing a parameter, check the method body yourself (e.g. via " +
                             "get_diagnostics/get_file_errors) rather than trusting a clean '(applied)' result."
+                    }),
+                McpServerTool.Create((Func<string, string, string, int, int, bool, string>)codeMetrics.Execute,
+                    new McpServerToolCreateOptions
+                    {
+                        Name = "code_metrics",
+                        Description = "READ-ONLY, NOT LIVE-TESTED YET (see docs/DEVNOTES.md): compute cyclomatic " +
+                            "(McCabe) complexity for a method/function-like member, or every such member in a " +
+                            "whole file (scanWholeFile=true with just 'filePath', sorted worst-first). Provide " +
+                            "either a symbolName or a file path with position for a single member. Complexity " +
+                            "starts at 1, +1 per if/else-if, loop, catch clause, &&, ||, ?:, ??, and each " +
+                            "switch case/arm - a plain PSI-tree walk, not a live daemon inspection."
                     }),
                 McpServerTool.Create((Func<string, string[], string>)syncFileFromDisk.Execute,
                     new McpServerToolCreateOptions
