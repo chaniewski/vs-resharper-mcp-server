@@ -1,0 +1,258 @@
+﻿using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using JetBrains.Application.Progress;
+using JetBrains.Application.Threading;
+using JetBrains.ProjectModel;
+using JetBrains.ReSharper.Psi;
+using JetBrains.ReSharper.Psi.Search;
+using JetBrains.ReSharper.Psi.Tree;
+using XC.VsResharperMcpServer.Core.Psi;
+
+namespace XC.VsResharperMcpServer.Core.Tools
+{
+    // Ported from resharper-mcp's FindImplementationsTool (see docs/DEVNOTES.md). Batch mode dropped for M3.
+    public class FindImplementationsTool
+    {
+        private readonly ISolution _solution;
+        private readonly IShellLocks _shellLocks;
+
+        public FindImplementationsTool(ISolution solution, IShellLocks shellLocks)
+        {
+            _solution = solution;
+            _shellLocks = shellLocks;
+        }
+
+        public string Execute(
+            string symbolName = null,
+            string kind = null,
+            string filePath = null,
+            int line = 0,
+            int column = 0,
+            int maxResults = 0)
+        {
+            return PsiThreadDispatcher.ExecuteRead(_shellLocks, _solution, "XC.VsResharperMcpServer.find_implementations", () =>
+                ExecuteCore(symbolName, kind, filePath, line, column, maxResults));
+        }
+
+        private string ExecuteCore(string symbolName, string kind, string filePath, int line, int column, int maxResults)
+        {
+            var (declaredElement, error) = PsiHelpers.ResolveFromArgs(_solution, symbolName, kind, filePath, line, column);
+            if (error != null) return error;
+
+            if (maxResults <= 0) maxResults = 50;
+            if (maxResults > 1000) maxResults = 1000;
+
+            var implementations = new List<ImplInfo>();
+            var hitLimit = false;
+
+            if (declaredElement is ITypeElement typeElement)
+            {
+                var searchDomain = SearchDomainFactory.Instance.CreateSearchDomain(_solution, false);
+                var psiServices = _solution.GetPsiServices();
+
+                var inheritors = new List<ITypeElement>();
+                psiServices.Finder.FindInheritors(
+                    typeElement,
+                    searchDomain,
+                    new FindResultConsumer(findResult =>
+                    {
+                        if (inheritors.Count >= maxResults)
+                        {
+                            hitLimit = true;
+                            return FindExecution.Stop;
+                        }
+                        if (findResult is FindResultInheritedElement inherited &&
+                            inherited.DeclaredElement is ITypeElement inheritedType)
+                            inheritors.Add(inheritedType);
+                        return FindExecution.Continue;
+                    }),
+                    NullProgressIndicator.Create());
+
+                var inheritorSet = new HashSet<string>(
+                    inheritors.Select(i => i.GetClrName().FullName));
+
+                foreach (var inheritor in inheritors)
+                {
+                    var info = BuildImplInfo(inheritor);
+                    if (info == null) continue;
+
+                    var directlyImplements = IsDirectImplementor(inheritor, typeElement);
+                    info.Direct = directlyImplements;
+
+                    if (!directlyImplements)
+                    {
+                        var via = FindIntermediateTypes(inheritor, typeElement, inheritorSet);
+                        if (via.Count > 0)
+                            info.Via = via;
+                    }
+
+                    implementations.Add(info);
+                }
+            }
+
+            if (!hitLimit && declaredElement is IOverridableMember overridable)
+            {
+                var psiServices = _solution.GetPsiServices();
+
+                psiServices.Finder.FindImplementingMembers(
+                    overridable,
+                    overridable.GetSearchDomain(),
+                    new FindResultConsumer(findResult =>
+                    {
+                        if (implementations.Count >= maxResults)
+                        {
+                            hitLimit = true;
+                            return FindExecution.Stop;
+                        }
+                        if (findResult is FindResultOverridableMember overrideResult)
+                        {
+                            var member = overrideResult.OverridableMember;
+                            if (member == null) return FindExecution.Continue;
+
+                            var info = BuildImplInfo(member);
+                            if (info != null)
+                            {
+                                if (member is IClrDeclaredElement clr)
+                                {
+                                    var containingType = clr.GetContainingType();
+                                    if (containingType != null && declaredElement is IClrDeclaredElement baseClr)
+                                    {
+                                        var baseContainingType = baseClr.GetContainingType();
+                                        if (baseContainingType != null)
+                                            info.Direct = IsDirectImplementor(containingType, baseContainingType);
+                                    }
+                                }
+                                implementations.Add(info);
+                            }
+                        }
+                        return FindExecution.Continue;
+                    }),
+                    true,
+                    NullProgressIndicator.Create());
+            }
+
+            var sorted = implementations
+                .OrderBy(i => i.Direct ? 0 : 1)
+                .ThenBy(i => i.Name)
+                .ToList();
+
+            var sb = new StringBuilder();
+            sb.Append(declaredElement.GetElementType().PresentableName).Append(' ');
+            sb.Append(declaredElement.ShortName);
+            if (hitLimit)
+            {
+                sb.Append(" - showing ").Append(sorted.Count).Append(" of ").Append(sorted.Count)
+                  .Append("+ implementations (limit reached; increase maxResults to see more)");
+            }
+            else
+            {
+                sb.Append(" - ").Append(sorted.Count).Append(" implementations");
+            }
+            sb.AppendLine();
+
+            foreach (var impl in sorted)
+            {
+                sb.AppendLine();
+                if (impl.Direct)
+                    sb.Append("[direct] ");
+                else if (impl.Via != null && impl.Via.Count > 0)
+                    sb.Append("[via ").Append(string.Join(", ", impl.Via)).Append("] ");
+                else
+                    sb.Append("[indirect] ");
+
+                sb.Append(impl.Kind).Append(' ').Append(impl.Name);
+                sb.Append(" - ").Append(impl.File).Append(':').AppendLine(impl.Line.ToString());
+                if (impl.Text != null)
+                    sb.Append("  ").AppendLine(impl.Text);
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private class ImplInfo
+        {
+            public string Name;
+            public string Kind;
+            public string File;
+            public int Line;
+            public string Text;
+            public bool Direct;
+            public List<string> Via;
+        }
+
+        private static ImplInfo BuildImplInfo(IDeclaredElement element)
+        {
+            if (element == null) return null;
+            var declarations = element.GetDeclarations();
+            if (declarations.Count == 0) return null;
+
+            var decl = declarations[0];
+            var range = TreeNodeExtensions.GetDocumentRange(decl);
+            if (!range.IsValid()) return null;
+
+            var sourceFile = decl.GetSourceFile();
+            if (sourceFile == null) return null;
+
+            var implFilePath = sourceFile.GetLocation().FullPath;
+            if (string.IsNullOrEmpty(implFilePath))
+                implFilePath = "[no source]";
+
+            var (implLine, _) = PsiHelpers.GetLineColumn(range.StartOffset);
+
+            return new ImplInfo
+            {
+                Name = element.ShortName,
+                Kind = element.GetElementType().PresentableName,
+                File = implFilePath,
+                Line = implLine,
+                Text = PsiHelpers.TruncateSnippet(decl.GetText(), 200)
+            };
+        }
+
+        private static bool IsDirectImplementor(ITypeElement inheritor, ITypeElement targetType)
+        {
+            var targetFqn = targetType.GetClrName().FullName;
+            foreach (var superType in inheritor.GetSuperTypes())
+            {
+                var resolved = superType.GetTypeElement();
+                if (resolved != null && resolved.GetClrName().FullName == targetFqn)
+                    return true;
+            }
+            return false;
+        }
+
+        private static List<string> FindIntermediateTypes(
+            ITypeElement inheritor, ITypeElement targetType, HashSet<string> allInheritorFqns)
+        {
+            var targetFqn = targetType.GetClrName().FullName;
+            var via = new List<string>();
+
+            foreach (var superType in inheritor.GetSuperTypes())
+            {
+                var resolved = superType.GetTypeElement();
+                if (resolved == null) continue;
+
+                var resolvedFqn = resolved.GetClrName().FullName;
+                if (resolvedFqn == targetFqn) continue;
+
+                if (allInheritorFqns.Contains(resolvedFqn) || ImplementsType(resolved, targetFqn))
+                    via.Add(resolved.ShortName);
+            }
+
+            return via;
+        }
+
+        private static bool ImplementsType(ITypeElement type, string targetFqn)
+        {
+            foreach (var superType in type.GetSuperTypes())
+            {
+                var resolved = superType.GetTypeElement();
+                if (resolved == null) continue;
+                if (resolved.GetClrName().FullName == targetFqn) return true;
+                if (ImplementsType(resolved, targetFqn)) return true;
+            }
+            return false;
+        }
+    }
+}

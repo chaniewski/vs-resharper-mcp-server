@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package>
+  <metadata>
+    <id>XC.VsResharperMcpServer</id>
+    <version>0.5.7</version>
+    <authors>Michal Chaniewski</authors>
+    <description>A Visual Studio-hosted ReSharper plugin that exposes ReSharper's PSI code intelligence (find usages, go to definition, rename, diagnostics, quick-fixes, refactorings, and more) to Claude Code and other MCP clients over an embedded local HTTP JSON-RPC server.</description>
+    <projectUrl>https://github.com/chaniewski/vs-resharper-mcp-server</projectUrl>
+    <license type="expression">MIT</license>
+    <tags>resharper visualstudio mcp claude ai</tags>
+    <dependencies>
+      <dependency id="Wave" version="261" />
+    </dependencies>
+  </metadata>
+  <files>
+    <file src="bin\Debug\net472\XC.VsResharperMcpServer.dll" target="dotFiles\" />
+    <file src="bin\Debug\net472\XC.VsResharperMcpServer.pdb" target="dotFiles\" />
+    <!-- Ship ONLY the dependency DLLs that are genuinely new (not already part of ReSharper's own
+         install) — see docs/DEVNOTES.md M1 section. Shipping the full closure in 0.0.2 caused
+         Extension Manager to overwrite ReSharper's OWN shared copies of 12 of these 16 DLLs with
+         our newer versions at a shared extraction path, which is the likely actual cause ReSharper
+         stopped loading entirely (not just our plugin) — its own code, strong-name-bound to the
+         exact older version, broke when a newer one silently took that version's place on disk.
+         Confirmed which 4 are genuinely absent from a live ReSharperPlatformVs18 install directly. -->
+    <file src="bin\Debug\net472\ModelContextProtocol.Core.dll" target="dotFiles\" />
+    <file src="bin\Debug\net472\Microsoft.Bcl.Memory.dll" target="dotFiles\" />
+    <file src="bin\Debug\net472\Microsoft.Extensions.AI.Abstractions.dll" target="dotFiles\" />
+    <file src="bin\Debug\net472\System.Net.ServerSentEvents.dll" target="dotFiles\" />
+  </files>
+</package>

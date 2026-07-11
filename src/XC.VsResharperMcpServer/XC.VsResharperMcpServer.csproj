@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>XC.VsResharperMcpServer</RootNamespace>
+    <AssemblyName>XC.VsResharperMcpServer</AssemblyName>
+    <!-- Keep in sync with XC.VsResharperMcpServer.nuspec's <version> on every release — read at runtime via
+         reflection so the marker file and MCP serverInfo.version always reflect the actual build
+         instead of a separately-hardcoded literal (see docs/DEVNOTES.md M2 section). -->
+    <Version>0.5.7</Version>
+    <!-- Needed for McpProtocolIcon.cs's System.Windows.Media vector geometry (the status bar icon).
+         Safe unlike NuGet-packaged BCL polyfills elsewhere in this project (see the NU1605 comment
+         below) - PresentationCore/PresentationFramework/WindowsBase are .NET Framework GAC assemblies,
+         not independently-versioned packages, and devenv.exe already has WPF fully loaded (it's a WPF
+         app; ReSharper's own UI is WPF-based, as literally evidenced by the SDK types this project
+         already decompiles/references) - no version-skew risk. -->
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="JetBrains.ReSharper.SDK" Version="2026.1.4" PrivateAssets="all" />
+    <PackageReference Include="ModelContextProtocol.Core" Version="1.4.1" />
+    <!-- NOT pinning transitive BCL-polyfill versions down to JetBrains.Platform.*'s exact pins —
+         tried it, NuGet hard-fails with NU1605 (package downgrade) because ModelContextProtocol.Core
+         has a genuine minimum-version floor above what JetBrains.Platform.* wants. Forcing the
+         downgrade past that protection risks missing-API-surface failures, which is worse than the
+         side-by-side-assembly-versions risk it would "fix". See docs/DEVNOTES.md M1 section —
+         accepting the NU1608 warnings and testing empirically inside devenv.exe instead. -->
+  </ItemGroup>
+</Project>

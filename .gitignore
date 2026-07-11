@@ -1,0 +1,29 @@
+## .NET / Visual Studio
+bin/
+obj/
+dist/
+*.user
+*.suo
+.vs/
+
+## ReSharper / Rider
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+.idea/
+
+## NuGet
+*.nupkg
+packages/
+
+## Local porting aid — see docs/DEVNOTES.md
+_reference/
+
+## Claude Code - personal/local state only; commands or a checked-in settings.json, if this
+## project adds them later, are meant to be shared and should stay tracked
+.claude/settings.local.json
+.claude/*.lock
+
+## OS
+Thumbs.db
+.DS_Store
