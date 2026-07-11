@@ -15,10 +15,11 @@ namespace XC.VsResharperMcpServer.Host
 {
     // Per-solution. Constructs ISolution-bound tool instances and adds them to the single
     // process-wide MCP server's ToolCollection (owned by McpShellComponent) on solution open;
-    // removes them on solution close. 26 tools total: 15 read (M2+M3) + 7 write (M4) +
-    // sync_file_from_disk + list_solutions + 2 refactorings beyond rename (M7: inline_variable,
-    // change_signature). safe_delete was implemented then dropped - see docs/DEVNOTES.md
-    // "safe_delete dropped" entry.
+    // removes them on solution close. 27 tools total on this branch: 15 read (M2+M3) + 7 write (M4) +
+    // sync_file_from_disk + list_solutions + 3 refactorings beyond rename (M7: inline_variable,
+    // change_signature, move_type - the last one NOT LIVE-TESTED, see docs/DEVNOTES.md). Branched from
+    // main before extract_method (a sibling M7 branch) - the two aren't merged together yet. safe_delete
+    // was implemented then dropped - see docs/DEVNOTES.md "safe_delete dropped" entry.
     //
     // Also where the HTTP server's port actually gets bound (McpShellComponent.EnsureStarted) -
     // deliberately deferred to here (not eager at shell-construction time) so this solution's
@@ -86,6 +87,7 @@ namespace XC.VsResharperMcpServer.Host
             var syncFileFromDisk = new SyncFileFromDiskTool(solution, shellLocks);
             var inlineVariable = new InlineVariableTool(solution, shellLocks, dataContexts, textControlManager);
             var changeSignature = new ChangeSignatureTool(solution, shellLocks);
+            var moveType = new MoveTypeTool(solution, shellLocks, dataContexts);
 
             _registeredTools = new[]
             {
@@ -294,6 +296,21 @@ namespace XC.VsResharperMcpServer.Host
                             "in the method body is NOT reported as a conflict and will leave a compile error " +
                             "there - after removing a parameter, check the method body yourself (e.g. via " +
                             "get_diagnostics/get_file_errors) rather than trusting a clean '(applied)' result."
+                    }),
+                McpServerTool.Create((Func<string, string, string, int, int, string, bool, bool, string>)moveType.Execute,
+                    new McpServerToolCreateOptions
+                    {
+                        Name = "move_type",
+                        Description = "WRITE, NOT LIVE-TESTED YET (see docs/DEVNOTES.md): move a type declaration " +
+                            "(class/struct/interface/enum/delegate) into its own new file, ReSharper's 'Move to " +
+                            "Another File' refactoring. Provide either a symbolName or a file path with position. " +
+                            "'newFileName' overrides the default file name (the type's own name); the file " +
+                            "extension is added automatically. Does NOT change the type's namespace - only " +
+                            "relocates the declaration, keeping its existing namespace. 'removeOldFileIfEmpty' " +
+                            "(default false) opts into deleting/renaming the original file when the moved type " +
+                            "was its only declaration; left false by default so the original file (now possibly " +
+                            "just an empty/near-empty shell) is left for review rather than auto-deleted. Set " +
+                            "dryRun=true to preview conflicts without applying anything."
                     }),
                 McpServerTool.Create((Func<string, string[], string>)syncFileFromDisk.Execute,
                     new McpServerToolCreateOptions
