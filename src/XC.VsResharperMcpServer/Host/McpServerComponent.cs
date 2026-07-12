@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using JetBrains.Application.DataContext;
 using JetBrains.Application.Parts;
 using JetBrains.Application.Threading;
+using JetBrains.DocumentManagers;
 using JetBrains.Lifetimes;
 using JetBrains.ProjectModel;
 using JetBrains.ReSharper.Feature.Services.CodeCleanup;
@@ -15,13 +16,14 @@ namespace XC.VsResharperMcpServer.Host
 {
     // Per-solution. Constructs ISolution-bound tool instances and adds them to the single
     // process-wide MCP server's ToolCollection (owned by McpShellComponent) on solution open;
-    // removes them on solution close. 29 tools total: 15 read (M2+M3) + 7 write (M4) +
+    // removes them on solution close. 30 tools total: 15 read (M2+M3) + 7 write (M4) +
     // sync_file_from_disk + list_solutions + 2 refactorings beyond rename (M7: inline_variable,
-    // change_signature) + generate_xml_doc (M9) + code_metrics (M10) + fix_usings' project/solution
-    // scope extension (M9, same tool, not a new registration). generate_xml_doc, code_metrics, and
-    // fix_usings' new bulk scope are NOT LIVE-TESTED - see docs/DEVNOTES.md. Still pending merge:
-    // extract_method/move_type (M7, higher-risk, deferred), structural_search (M8 spike). safe_delete
-    // was implemented then dropped - see docs/DEVNOTES.md "safe_delete dropped" entry.
+    // change_signature) + generate_xml_doc (M9) + code_metrics (M10) + structural_search (M8 spike,
+    // search only) + fix_usings' project/solution scope extension (M9, same tool, not a new
+    // registration). generate_xml_doc, code_metrics, structural_search, and fix_usings' new bulk scope
+    // are all NOT LIVE-TESTED - see docs/DEVNOTES.md. Still pending merge: extract_method/move_type
+    // (M7, higher-risk, deferred). safe_delete was implemented then dropped - see docs/DEVNOTES.md
+    // "safe_delete dropped" entry.
     //
     // Also where the HTTP server's port actually gets bound (McpShellComponent.EnsureStarted) -
     // deliberately deferred to here (not eager at shell-construction time) so this solution's
@@ -42,6 +44,7 @@ namespace XC.VsResharperMcpServer.Host
             CodeCleanupSettingsComponent cleanupSettings,
             DataContexts dataContexts,
             ITextControlManager textControlManager,
+            DocumentManager documentManager,
             ILogger logger)
         {
             _logger = logger;
@@ -91,6 +94,7 @@ namespace XC.VsResharperMcpServer.Host
             var changeSignature = new ChangeSignatureTool(solution, shellLocks);
             var generateXmlDoc = new GenerateXmlDocTool(solution, shellLocks);
             var codeMetrics = new CodeMetricsTool(solution, shellLocks);
+            var structuralSearch = new StructuralSearchTool(solution, shellLocks, documentManager);
 
             _registeredTools = new[]
             {
@@ -328,6 +332,22 @@ namespace XC.VsResharperMcpServer.Host
                             "either a symbolName or a file path with position for a single member. Complexity " +
                             "starts at 1, +1 per if/else-if, loop, catch clause, &&, ||, ?:, ??, and each " +
                             "switch case/arm - a plain PSI-tree walk, not a live daemon inspection."
+                    }),
+                McpServerTool.Create((Func<string, string, int, string>)structuralSearch.Execute,
+                    new McpServerToolCreateOptions
+                    {
+                        Name = "structural_search",
+                        Description = "READ-ONLY M8 SPIKE, NOT LIVE-TESTED YET (see docs/DEVNOTES.md): search " +
+                            "for code matching a ReSharper Structural Search pattern (AST-structural, not text/" +
+                            "regex - e.g. \"$expr$.ToString()\" matches any ToString() call regardless of " +
+                            "formatting/receiver expression complexity; $name$ placeholders match any " +
+                            "sub-element). Omit 'filePath' to search the whole solution, or scope to one file. " +
+                            "CAUTION: the SDK wiring is confirmed real (every type/constructor used is read " +
+                            "directly from decompiled source), but whether any given pattern string actually " +
+                            "parses and matches correctly is completely unverified without live testing - " +
+                            "unlike a compile error, a wrong-but-parseable pattern will just silently return " +
+                            "the wrong (possibly empty, possibly everything) result set. No replace - search " +
+                            "only, per the M8 spike's own scope."
                     }),
                 McpServerTool.Create((Func<string, string[], string>)syncFileFromDisk.Execute,
                     new McpServerToolCreateOptions
