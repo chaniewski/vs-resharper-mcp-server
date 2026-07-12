@@ -5,7 +5,7 @@
     <!-- Keep in sync with XC.VsResharperMcpServer.nuspec's <version> on every release — read at runtime via
          reflection so the marker file and MCP serverInfo.version always reflect the actual build
          instead of a separately-hardcoded literal (see docs/DEVNOTES.md M2 section). -->
-    <Version>0.8.1</Version>
+    <Version>0.8.2</Version>
     <!-- Needed for McpProtocolIcon.cs's System.Windows.Media vector geometry (the status bar icon).
          Safe unlike NuGet-packaged BCL polyfills elsewhere in this project (see the NU1605 comment
          below) - PresentationCore/PresentationFramework/WindowsBase are .NET Framework GAC assemblies,

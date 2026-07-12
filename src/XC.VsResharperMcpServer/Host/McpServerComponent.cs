@@ -220,7 +220,10 @@ namespace XC.VsResharperMcpServer.Host
                         Name = "list_quick_fixes",
                         Description = "List the ReSharper quick-fixes (bulb actions) available at a position in a " +
                             "file. Runs the daemon inspections over the file and reports the available quick-fixes: " +
-                            "the fix id, the bulb-action display text, and the quick-fix/highlighting .NET types."
+                            "the fix id, the bulb-action display text, and the quick-fix/highlighting .NET types. " +
+                            "Entries that apply_quick_fix would refuse (quick-fix types needing an interactive " +
+                            "editor session) are flagged 'NOT SUPPORTED HEADLESS' in the listing - check for that " +
+                            "flag before calling apply_quick_fix on a candidate from this list."
                     }),
                 McpServerTool.Create((Func<string, string, int, bool, string, int, int, string>)flow.Execute,
                     new McpServerToolCreateOptions
@@ -279,11 +282,14 @@ namespace XC.VsResharperMcpServer.Host
                         Description = "WRITE: apply a ReSharper quick-fix (bulb action) at a position. Omit " +
                             "fixId/index to list the available fixes at that position (this listing is always " +
                             "safe and fast - it never applies anything). If exactly one fix is available it is " +
-                            "applied automatically. A small set of quick-fix types that require an interactive " +
+                            "applied automatically. A known set of quick-fix types that require an interactive " +
                             "editor session to complete (e.g. 'Create X from usage', 'Change all local/wrong-ref', " +
                             "'Find this type on nuget.org') are refused immediately with a clear explanation " +
                             "instead of being attempted - see docs/DEVNOTES.md 'apply_quick_fix PSI-lock wedge' " +
-                            "for why. Every other fix type applies normally and reliably."
+                            "for why. Every other fix type has applied normally and reliably in testing, but this " +
+                            "is a blocklist of known-bad cases, not a structural guarantee - a not-yet-encountered " +
+                            "quick-fix type that also completes via an interactive hotspot session could still " +
+                            "hang the IDE until devenv.exe is restarted."
                     }),
                 McpServerTool.Create((Func<string, string, bool, bool, string>)applySuggestions.Execute,
                     new McpServerToolCreateOptions
@@ -337,7 +343,7 @@ namespace XC.VsResharperMcpServer.Host
                             "without modifying any code. CAUTION: removing a parameter that is still referenced " +
                             "in the method body is NOT reported as a conflict and will leave a compile error " +
                             "there - after removing a parameter, check the method body yourself (e.g. via " +
-                            "get_diagnostics/get_file_errors) rather than trusting a clean '(applied)' result."
+                            "get_diagnostics) rather than trusting a clean '(applied)' result."
                     }),
                 McpServerTool.Create((Func<string, string, string, int, int, bool, bool, string>)generateXmlDoc.Execute,
                     new McpServerToolCreateOptions
@@ -359,7 +365,10 @@ namespace XC.VsResharperMcpServer.Host
                             "whole file (scanWholeFile=true with just 'filePath', sorted worst-first). Provide " +
                             "either a symbolName or a file path with position for a single member. Complexity " +
                             "starts at 1, +1 per if/else-if, loop, catch clause, &&, ||, ?:, ??, and each " +
-                            "switch case/arm - a plain PSI-tree walk, not a live daemon inspection."
+                            "switch case/arm - a plain PSI-tree walk, not a live daemon inspection. A nested " +
+                            "local function's decision points count toward BOTH its own reported complexity AND " +
+                            "its containing method's - not carved out as a separate unit - so a whole-file scan's " +
+                            "per-member complexities are not a clean, non-overlapping partition of the file."
                     }),
                 // structural_search RE-ENABLED 2026-07-12 (see docs/DEVNOTES.md "structural_search hang -
                 // root cause and fix"): the search-mode hang (pattern "$x$.GetHashCode()", 120s+, twice)

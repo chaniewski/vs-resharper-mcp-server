@@ -256,7 +256,13 @@ namespace XC.VsResharperMcpServer.Host
             "generate_members, etc.) risk clobbering your edits with a stale cached version. Tools you " +
             "call on this server itself (rename_symbol, generate_members, format_file, ...) always stay " +
             "in sync automatically and never need this extra step - it is only needed after edits made " +
-            "outside this server.";
+            "outside this server.\n\n" +
+            "POSITION SEMANTICS: for every tool taking a line/column position, the caret sits in the gap " +
+            "BETWEEN characters, not on a character. Pointing at an identifier's first character can fail " +
+            "to resolve ('No resolvable symbol found') while pointing at its last character (or the " +
+            "position immediately after it) resolves correctly. If a position-based call unexpectedly " +
+            "fails to resolve a symbol you can see is right there, try the end of the identifier before " +
+            "concluding the tool is broken.";
 
         private McpServerOptions BuildServerOptions()
         {
