@@ -20,9 +20,10 @@ namespace XC.VsResharperMcpServer.Host
     // sync_file_from_disk + list_solutions + 4 refactorings beyond rename (M7: inline_variable,
     // change_signature, extract_method, move_type) + generate_xml_doc (M9) + code_metrics (M10) +
     // structural_search (M8 spike, search only) + fix_usings' project/solution scope extension (M9,
-    // same tool, not a new registration). generate_xml_doc/code_metrics/structural_search/fix_usings'
-    // bulk scope all live-tested and confirmed working as of 0.5.9 - see docs/DEVNOTES.md.
-    // extract_method/move_type are NOT LIVE-TESTED (just merged, pending install). safe_delete was
+    // same tool, not a new registration). All confirmed live-tested and working as of 2026-07-12 except
+    // extract_method (a real, non-hang SDK NullReferenceException found and fixed via
+    // CompilationContextCookie in PsiThreadDispatcher, not yet re-verified live) and structural_search's
+    // replace mode (not yet implemented) - see docs/DEVNOTES.md. safe_delete was
     // implemented then dropped - see docs/DEVNOTES.md "safe_delete dropped" entry.
     //
     // Also where the HTTP server's port actually gets bound (McpShellComponent.EnsureStarted) -
@@ -368,7 +369,7 @@ namespace XC.VsResharperMcpServer.Host
                     new McpServerToolCreateOptions
                     {
                         Name = "move_type",
-                        Description = "WRITE, NOT LIVE-TESTED YET (see docs/DEVNOTES.md): move a type declaration " +
+                        Description = "WRITE: move a type declaration " +
                             "(class/struct/interface/enum/delegate) into its own new file, ReSharper's 'Move to " +
                             "Another File' refactoring. Provide either a symbolName or a file path with position. " +
                             "'newFileName' overrides the default file name (the type's own name); the file " +
@@ -377,7 +378,10 @@ namespace XC.VsResharperMcpServer.Host
                             "(default false) opts into deleting/renaming the original file when the moved type " +
                             "was its only declaration; left false by default so the original file (now possibly " +
                             "just an empty/near-empty shell) is left for review rather than auto-deleted. Set " +
-                            "dryRun=true to preview conflicts without applying anything."
+                            "dryRun=true to preview conflicts without applying anything. KNOWN LIMITATION: a " +
+                            "standalone leading comment directly above the type is NOT moved with it and is left " +
+                            "orphaned at the original location - check for and manually clean up a leftover " +
+                            "comment after a real move."
                     }),
                 McpServerTool.Create((Func<string, string[], string>)syncFileFromDisk.Execute,
                     new McpServerToolCreateOptions

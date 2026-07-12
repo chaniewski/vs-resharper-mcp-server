@@ -63,6 +63,16 @@ namespace XC.VsResharperMcpServer.Core.Tools
     // Deleting/renaming the now-possibly-empty original file is opt-in via 'removeOldFileIfEmpty'
     // (default false, matching ReSharper's own DataModel.RemoveOldFile default when driven
     // non-interactively) - a safer default for a first, unverified cut of this tool.
+    //
+    // LIVE-TESTED (2026-07-12, see docs/DEVNOTES.md): dry-run and real apply both confirmed working -
+    // correct new file created with correct content/namespace, correct removal from the original file,
+    // no hang, devenv stayed responsive. One real, minor, KNOWN LIMITATION found: a standalone leading
+    // comment directly above the moved type is NOT moved with it and is NOT cleaned up from the
+    // original file either - it's simply orphaned in place. This is ReSharper's own
+    // MoveDeclaration/RemoveTypeDeclaration behavior (confirmed via the live test, not this tool's own
+    // logic), which only touches the type declaration node itself, not preceding standalone comment
+    // trivia. Not fixed - flagged here and in the tool's MCP description so a caller knows to check for
+    // (and clean up) a leftover comment at the old location after a real move.
     public class MoveTypeTool
     {
         private readonly ISolution _solution;
