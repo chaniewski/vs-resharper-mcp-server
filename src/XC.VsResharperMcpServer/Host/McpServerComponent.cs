@@ -15,13 +15,13 @@ namespace XC.VsResharperMcpServer.Host
 {
     // Per-solution. Constructs ISolution-bound tool instances and adds them to the single
     // process-wide MCP server's ToolCollection (owned by McpShellComponent) on solution open;
-    // removes them on solution close. 28 tools total: 15 read (M2+M3) + 7 write (M4) +
+    // removes them on solution close. 29 tools total: 15 read (M2+M3) + 7 write (M4) +
     // sync_file_from_disk + list_solutions + 2 refactorings beyond rename (M7: inline_variable,
-    // change_signature) + generate_xml_doc (M9) + fix_usings' project/solution scope extension (M9,
-    // same tool, not a new registration). generate_xml_doc and fix_usings' new bulk scope are
-    // NOT LIVE-TESTED - see docs/DEVNOTES.md. Still pending merge: extract_method/move_type (M7,
-    // higher-risk, deferred), code_metrics (M10), structural_search (M8 spike). safe_delete was
-    // implemented then dropped - see docs/DEVNOTES.md "safe_delete dropped" entry.
+    // change_signature) + generate_xml_doc (M9) + code_metrics (M10) + fix_usings' project/solution
+    // scope extension (M9, same tool, not a new registration). generate_xml_doc, code_metrics, and
+    // fix_usings' new bulk scope are NOT LIVE-TESTED - see docs/DEVNOTES.md. Still pending merge:
+    // extract_method/move_type (M7, higher-risk, deferred), structural_search (M8 spike). safe_delete
+    // was implemented then dropped - see docs/DEVNOTES.md "safe_delete dropped" entry.
     //
     // Also where the HTTP server's port actually gets bound (McpShellComponent.EnsureStarted) -
     // deliberately deferred to here (not eager at shell-construction time) so this solution's
@@ -90,6 +90,7 @@ namespace XC.VsResharperMcpServer.Host
             var inlineVariable = new InlineVariableTool(solution, shellLocks, dataContexts, textControlManager);
             var changeSignature = new ChangeSignatureTool(solution, shellLocks);
             var generateXmlDoc = new GenerateXmlDocTool(solution, shellLocks);
+            var codeMetrics = new CodeMetricsTool(solution, shellLocks);
 
             _registeredTools = new[]
             {
@@ -316,6 +317,17 @@ namespace XC.VsResharperMcpServer.Host
                             "symbol. Provide either a symbolName or a file path with position for a single symbol, " +
                             "OR set scanWholeFile=true with just 'filePath' to stub every undocumented PUBLIC " +
                             "member in that file. Already-documented symbols are skipped unless overwrite=true."
+                    }),
+                McpServerTool.Create((Func<string, string, string, int, int, bool, string>)codeMetrics.Execute,
+                    new McpServerToolCreateOptions
+                    {
+                        Name = "code_metrics",
+                        Description = "READ-ONLY, NOT LIVE-TESTED YET (see docs/DEVNOTES.md): compute cyclomatic " +
+                            "(McCabe) complexity for a method/function-like member, or every such member in a " +
+                            "whole file (scanWholeFile=true with just 'filePath', sorted worst-first). Provide " +
+                            "either a symbolName or a file path with position for a single member. Complexity " +
+                            "starts at 1, +1 per if/else-if, loop, catch clause, &&, ||, ?:, ??, and each " +
+                            "switch case/arm - a plain PSI-tree walk, not a live daemon inspection."
                     }),
                 McpServerTool.Create((Func<string, string[], string>)syncFileFromDisk.Execute,
                     new McpServerToolCreateOptions
