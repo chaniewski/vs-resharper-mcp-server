@@ -94,9 +94,29 @@ namespace XC.VsResharperMcpServer.Core.Tools
             if (!done.Wait(TimeSpan.FromSeconds(ToolTimeoutSeconds)))
             {
                 cancelled.Cancel();
-                throw new TimeoutException(
+
+                // Match the 'caught' path below: format as the tool's own text output rather than
+                // throwing a raw exception, which the MCP SDK's tool-invocation wrapper swallows into a
+                // content-free "An error occurred invoking 'x'" (confirmed live 2026-07-12 - see
+                // docs/DEVNOTES.md "apply_quick_fix PSI-lock wedge"). cancelled.Cancel() only stops the
+                // dispatched action from STARTING if it hasn't yet - it cannot interrupt work already in
+                // progress (ReSharper SDK calls have no cancellation-token support), so a timeout here
+                // does not guarantee the underlying PSI-thread work has actually stopped. If it hasn't,
+                // every subsequent PSI-lock-dependent tool call will queue behind it and also time out
+                // until devenv.exe is restarted - worth saying explicitly so a caller (human or agent)
+                // knows to check for that rather than assuming this was an isolated, resolved failure.
+                var timeoutMessage =
                     $"Timed out after {ToolTimeoutSeconds}s waiting for R# to process '{operationName}'. " +
-                    "The IDE may be busy indexing or performing another operation.");
+                    "The IDE may be busy indexing or performing another operation - or, if this was a headless " +
+                    "quick-fix/refactoring call, the underlying work may still be stuck on ReSharper's PSI " +
+                    "thread and could keep blocking every other tool call until devenv.exe is restarted. If " +
+                    "other tool calls also start timing out right after this one, that's a strong signal a " +
+                    "restart is needed rather than a transient fluke.";
+
+                if (typeof(T) == typeof(string))
+                    return (T)(object)timeoutMessage;
+
+                throw new TimeoutException(timeoutMessage);
             }
 
             if (caught != null)

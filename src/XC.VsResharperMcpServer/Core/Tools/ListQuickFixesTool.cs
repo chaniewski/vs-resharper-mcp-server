@@ -176,6 +176,9 @@ namespace XC.VsResharperMcpServer.Core.Tools
                 sb.Append(f.fixId).Append(": ").AppendLine(f.text ?? "(no text)");
                 sb.Append("  quickFixType: ").AppendLine(f.quickFixType);
                 sb.Append("  highlightingType: ").AppendLine(f.highlightingType);
+                if (HeadlessUnsafeQuickFixes.IsBlocked(f.quickFixType))
+                    sb.AppendLine("  NOTE: apply_quick_fix refuses this type headlessly - known to hang " +
+                                  "(opens an interactive hotspot session that never completes). See docs/DEVNOTES.md.");
             }
 
             return sb.ToString().TrimEnd();
