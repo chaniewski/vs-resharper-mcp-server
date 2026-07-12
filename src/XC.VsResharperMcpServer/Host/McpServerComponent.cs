@@ -225,13 +225,20 @@ namespace XC.VsResharperMcpServer.Host
                             "kind='equality-members' generates Equals(T)/Equals(object)/GetHashCode. " +
                             "('implement-interface'/'override-members' are accepted but not yet supported.)"
                     }),
-                McpServerTool.Create((Func<string, Dictionary<string, string>, string>)fixUsings.Execute,
+                McpServerTool.Create((Func<string, string, bool, Dictionary<string, string>, bool, string>)fixUsings.Execute,
                     new McpServerToolCreateOptions
                     {
                         Name = "fix_usings",
-                        Description = "WRITE: fix missing using directives in a C# file. Finds unresolved type " +
+                        Description = "WRITE: fix missing using directives in C# file(s). Finds unresolved type " +
                             "references and adds using directives for unambiguous matches. Reports ambiguous " +
-                            "matches with candidates; pass 'resolutions' (type name -> namespace) to resolve them."
+                            "matches with candidates; pass 'resolutions' (type name -> namespace, applied " +
+                            "uniformly across all files in scope) to resolve them. Provide EXACTLY ONE of: " +
+                            "'filePath' (single file, original scope), 'projectName' (every .cs file in that " +
+                            "project), or scanWholeSolution=true (every .cs file in the solution). " +
+                            "PROJECT/SOLUTION SCOPE IS NOT LIVE-TESTED YET (see docs/DEVNOTES.md) - the " +
+                            "single-'filePath' scope is the original, already-tested path and is unaffected. " +
+                            "dryRun is only supported for 'projectName'/scanWholeSolution scope, not a single " +
+                            "'filePath'."
                     }),
                 McpServerTool.Create((Func<string, string, string>)formatFile.Execute,
                     new McpServerToolCreateOptions
