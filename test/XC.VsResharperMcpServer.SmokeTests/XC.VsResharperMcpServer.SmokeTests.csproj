@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Overrides the repo-wide Directory.Build.props net472 pin: unlike XC.VsResharperMcpServer.csproj,
+       this project never loads into devenv.exe - it's a standalone HTTP client that talks to an
+       already-running plugin instance over loopback HTTP/JSON-RPC, so it can target a normal modern
+       TFM. See docs/DEVNOTES.md "smoke test suite" section for why these tests target a live,
+       already-bound server instead of launching devenv.exe themselves. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>XC.VsResharperMcpServer.SmokeTests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <!-- Skip.If(...) - lets a test report "skipped" rather than "failed" when no XC.VsResharperMcpServer
+         instance is currently bound (e.g. running `dotnet test` with no devenv open at all), instead of
+         either red-failing everywhere or silently passing with no signal. -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.4.13" />
+  </ItemGroup>
+</Project>

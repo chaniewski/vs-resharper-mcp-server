@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/XC.VsResharperMcpServer/XC.VsResharperMcpServer.csproj" />
   </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/XC.VsResharperMcpServer.SmokeTests/XC.VsResharperMcpServer.SmokeTests.csproj" />
+  </Folder>
 </Solution>
