@@ -107,8 +107,25 @@ namespace XC.VsResharperMcpServer.Host
                     var message = await JsonSerializer.DeserializeAsync<JsonRpcMessage>(
                         context.Request.InputStream, McpJsonUtilities.DefaultOptions, token);
 
-                    context.Response.ContentType = "application/json";
-                    await _transport.HandlePostRequestAsync(message, context.Response.OutputStream, token);
+                    // StreamableHttpPostTransport (SDK-internal, ModelContextProtocol.Core 1.4.1) always
+                    // frames a POST response as SSE ("event: message\ndata: {...}") via its own SseEventWriter -
+                    // there is no code path in this SDK version that emits a bare JSON body. This must be set
+                    // to "text/event-stream" BEFORE the call below, not after: HttpListener flushes response
+                    // headers on the first OutputStream write, which happens inside HandlePostRequestAsync
+                    // itself. Previously this was hardcoded to "application/json", which every real
+                    // spec-compliant MCP client (trusting the Content-Type header, not sniffing the body)
+                    // failed to parse - "JSON Parse error: Unexpected identifier 'event'". Invisible to this
+                    // project's own manual testing because McpTestClient.cs/mcp-call.ps1 parse SSE-or-JSON
+                    // generically regardless of the header - only a real client caught it. See docs/DEVNOTES.md.
+                    context.Response.ContentType = "text/event-stream";
+                    var wroteResponse = await _transport.HandlePostRequestAsync(message, context.Response.OutputStream, token);
+                    if (!wroteResponse)
+                    {
+                        // Notification-only POST (e.g. notifications/initialized): the SDK contract says to
+                        // respond with an empty 202 Accepted in this case, and it writes nothing to the stream
+                        // itself here, so headers are still unflushed and safe to override.
+                        context.Response.StatusCode = 202;
+                    }
                     context.Response.OutputStream.Close();
                 }
                 else if (context.Request.HttpMethod == "GET")
