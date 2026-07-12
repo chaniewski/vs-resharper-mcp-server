@@ -20,9 +20,10 @@ namespace XC.VsResharperMcpServer.Host
     // sync_file_from_disk + list_solutions + 2 refactorings beyond rename (M7: inline_variable,
     // change_signature) + generate_xml_doc (M9) + code_metrics (M10) + structural_search (M8 spike,
     // search only) + fix_usings' project/solution scope extension (M9, same tool, not a new
-    // registration). generate_xml_doc, code_metrics, structural_search, and fix_usings' new bulk scope
-    // are all NOT LIVE-TESTED - see docs/DEVNOTES.md. Still pending merge: extract_method/move_type
-    // (M7, higher-risk, deferred). safe_delete was implemented then dropped - see docs/DEVNOTES.md
+    // registration). All four live-tested and confirmed working as of 0.5.9 (generate_xml_doc and
+    // structural_search each had a real bug found and fixed during that round - see docs/DEVNOTES.md).
+    // Still pending merge: extract_method/move_type (M7, higher-risk, deferred). safe_delete was
+    // implemented then dropped - see docs/DEVNOTES.md
     // "safe_delete dropped" entry.
     //
     // Also where the HTTP server's port actually gets bound (McpShellComponent.EnsureStarted) -
@@ -244,8 +245,6 @@ namespace XC.VsResharperMcpServer.Host
                             "uniformly across all files in scope) to resolve them. Provide EXACTLY ONE of: " +
                             "'filePath' (single file, original scope), 'projectName' (every .cs file in that " +
                             "project), or scanWholeSolution=true (every .cs file in the solution). " +
-                            "PROJECT/SOLUTION SCOPE IS NOT LIVE-TESTED YET (see docs/DEVNOTES.md) - the " +
-                            "single-'filePath' scope is the original, already-tested path and is unaffected. " +
                             "dryRun is only supported for 'projectName'/scanWholeSolution scope, not a single " +
                             "'filePath'."
                     }),
@@ -315,7 +314,7 @@ namespace XC.VsResharperMcpServer.Host
                     new McpServerToolCreateOptions
                     {
                         Name = "generate_xml_doc",
-                        Description = "WRITE, NOT LIVE-TESTED YET (see docs/DEVNOTES.md): generate an XML doc " +
+                        Description = "WRITE: generate an XML doc " +
                             "comment stub (<summary>/<param>/<typeparam>/<returns>/<exception>, following " +
                             "ReSharper's own template for the declaration's actual signature) for an undocumented " +
                             "symbol. Provide either a symbolName or a file path with position for a single symbol, " +
@@ -326,7 +325,7 @@ namespace XC.VsResharperMcpServer.Host
                     new McpServerToolCreateOptions
                     {
                         Name = "code_metrics",
-                        Description = "READ-ONLY, NOT LIVE-TESTED YET (see docs/DEVNOTES.md): compute cyclomatic " +
+                        Description = "READ-ONLY: compute cyclomatic " +
                             "(McCabe) complexity for a method/function-like member, or every such member in a " +
                             "whole file (scanWholeFile=true with just 'filePath', sorted worst-first). Provide " +
                             "either a symbolName or a file path with position for a single member. Complexity " +
@@ -337,17 +336,17 @@ namespace XC.VsResharperMcpServer.Host
                     new McpServerToolCreateOptions
                     {
                         Name = "structural_search",
-                        Description = "READ-ONLY M8 SPIKE, NOT LIVE-TESTED YET (see docs/DEVNOTES.md): search " +
+                        Description = "READ-ONLY M8 SPIKE: search " +
                             "for code matching a ReSharper Structural Search pattern (AST-structural, not text/" +
                             "regex - e.g. \"$expr$.ToString()\" matches any ToString() call regardless of " +
                             "formatting/receiver expression complexity; $name$ placeholders match any " +
-                            "sub-element). Omit 'filePath' to search the whole solution, or scope to one file. " +
-                            "CAUTION: the SDK wiring is confirmed real (every type/constructor used is read " +
-                            "directly from decompiled source), but whether any given pattern string actually " +
-                            "parses and matches correctly is completely unverified without live testing - " +
-                            "unlike a compile error, a wrong-but-parseable pattern will just silently return " +
-                            "the wrong (possibly empty, possibly everything) result set. No replace - search " +
-                            "only, per the M8 spike's own scope."
+                            "sub-element and are auto-guessed from context, matching whole sub-expressions not " +
+                            "just identifiers). Omit 'filePath' to search the whole solution, or scope to one " +
+                            "file. Confirmed live for literal patterns and simple placeholder patterns " +
+                            "(see docs/DEVNOTES.md) - more elaborate patterns (statement/type/attribute-kind, " +
+                            "multiple placeholders, nested structure) remain untested; a wrong-but-parseable " +
+                            "pattern can silently return the wrong result set rather than erroring. No replace " +
+                            "- search only, per the M8 spike's own scope."
                     }),
                 McpServerTool.Create((Func<string, string[], string>)syncFileFromDisk.Execute,
                     new McpServerToolCreateOptions
