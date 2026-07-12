@@ -16,14 +16,14 @@ namespace XC.VsResharperMcpServer.Host
 {
     // Per-solution. Constructs ISolution-bound tool instances and adds them to the single
     // process-wide MCP server's ToolCollection (owned by McpShellComponent) on solution open;
-    // removes them on solution close. 30 tools total: 15 read (M2+M3) + 7 write (M4) +
-    // sync_file_from_disk + list_solutions + 2 refactorings beyond rename (M7: inline_variable,
-    // change_signature) + generate_xml_doc (M9) + code_metrics (M10) + structural_search (M8 spike,
-    // search only) + fix_usings' project/solution scope extension (M9, same tool, not a new
-    // registration). All four live-tested and confirmed working as of 0.5.9 (generate_xml_doc and
-    // structural_search each had a real bug found and fixed during that round - see docs/DEVNOTES.md).
-    // Still pending merge: extract_method/move_type (M7, higher-risk, deferred). safe_delete was
-    // implemented then dropped - see docs/DEVNOTES.md
+    // removes them on solution close. 31 tools total: 15 read (M2+M3) + 7 write (M4) +
+    // sync_file_from_disk + list_solutions + 3 refactorings beyond rename (M7: inline_variable,
+    // change_signature, extract_method) + generate_xml_doc (M9) + code_metrics (M10) +
+    // structural_search (M8 spike, search only) + fix_usings' project/solution scope extension (M9,
+    // same tool, not a new registration). generate_xml_doc/code_metrics/structural_search/fix_usings'
+    // bulk scope all live-tested and confirmed working as of 0.5.9 - see docs/DEVNOTES.md.
+    // extract_method is NOT LIVE-TESTED (just merged, pending install). Still pending merge: move_type
+    // (M7, also unverified). safe_delete was implemented then dropped - see docs/DEVNOTES.md
     // "safe_delete dropped" entry.
     //
     // Also where the HTTP server's port actually gets bound (McpShellComponent.EnsureStarted) -
@@ -96,6 +96,7 @@ namespace XC.VsResharperMcpServer.Host
             var generateXmlDoc = new GenerateXmlDocTool(solution, shellLocks);
             var codeMetrics = new CodeMetricsTool(solution, shellLocks);
             var structuralSearch = new StructuralSearchTool(solution, shellLocks, documentManager);
+            var extractMethod = new ExtractMethodTool(solution, shellLocks);
 
             _registeredTools = new[]
             {
@@ -347,6 +348,21 @@ namespace XC.VsResharperMcpServer.Host
                             "multiple placeholders, nested structure) remain untested; a wrong-but-parseable " +
                             "pattern can silently return the wrong result set rather than erroring. No replace " +
                             "- search only, per the M8 spike's own scope."
+                    }),
+                McpServerTool.Create((Func<string, int, int, int, int, string, string, bool, string>)extractMethod.Execute,
+                    new McpServerToolCreateOptions
+                    {
+                        Name = "extract_method",
+                        Description = "WRITE, NOT LIVE-TESTED YET (see docs/DEVNOTES.md): extract a range of " +
+                            "statements into a new method (or property/local function/chained constructor, " +
+                            "whichever ReSharper itself would also offer for this exact selection). Give the " +
+                            "1-based statement range via startLine/startColumn/endLine/endColumn - the selection " +
+                            "must cover one or more complete statements. 'newMethodName' overrides the " +
+                            "auto-suggested name. 'kind' picks among the available occurrences: 'method' " +
+                            "(default), 'property', 'local-function', 'chained-constructor' - if the requested " +
+                            "kind isn't available for this selection, the result lists what is. Only extracting " +
+                            "a STATEMENT RANGE is supported (not a single expression, not Extract Method Object). " +
+                            "Set dryRun=true to preview conflicts without applying anything."
                     }),
                 McpServerTool.Create((Func<string, string[], string>)syncFileFromDisk.Execute,
                     new McpServerToolCreateOptions
