@@ -275,10 +275,14 @@ namespace XC.VsResharperMcpServer.Host
                     new McpServerToolCreateOptions
                     {
                         Name = "apply_quick_fix",
-                        Description = "WRITE, RISKY/best-effort: apply a ReSharper quick-fix (bulb action) at a " +
-                            "position. Omit fixId/index to list the available fixes at that position. If exactly " +
-                            "one fix is available it is applied automatically. May not succeed headlessly since " +
-                            "quick-fix execution normally needs an interactive editor."
+                        Description = "WRITE: apply a ReSharper quick-fix (bulb action) at a position. Omit " +
+                            "fixId/index to list the available fixes at that position (this listing is always " +
+                            "safe and fast - it never applies anything). If exactly one fix is available it is " +
+                            "applied automatically. A small set of quick-fix types that require an interactive " +
+                            "editor session to complete (e.g. 'Create X from usage', 'Change all local/wrong-ref', " +
+                            "'Find this type on nuget.org') are refused immediately with a clear explanation " +
+                            "instead of being attempted - see docs/DEVNOTES.md 'apply_quick_fix PSI-lock wedge' " +
+                            "for why. Every other fix type applies normally and reliably."
                     }),
                 McpServerTool.Create((Func<string, string, bool, bool, string>)applySuggestions.Execute,
                     new McpServerToolCreateOptions

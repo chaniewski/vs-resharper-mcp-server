@@ -97,27 +97,38 @@ namespace XC.VsResharperMcpServer.Core.Tools
 
             var currentText = document.GetText();
             var textChanged = !string.Equals(currentText, diskText, StringComparison.Ordinal);
-            if (textChanged)
-            {
-                document.ReplaceText(new TextRange(0, document.GetTextLength()), diskText);
 
-                // ExecuteWrite's outer PsiTransactionCookie asserts "all documents committed" when it
-                // auto-commits on dispose - ReplaceText alone leaves this document dirty, which used to
-                // throw JetBrains.Diagnostics.Assertion+AssertionException there instead of returning a
-                // result. Committing explicitly here, inside our own action, satisfies that assertion.
-                _solution.GetPsiServices().Files.CommitAllDocuments();
-            }
+            // ALWAYS call ReplaceText, even when currentText already equals diskText - found live
+            // 2026-07-12 (see docs/DEVNOTES.md "sync_file_from_disk: real fix found") that this is
+            // the actual staleness bug, not a timing/delay issue: MarkAsDirty + InvalidatePsiFilesCache
+            // ALONE (the old behavior when textChanged was false) do not reliably trigger a real
+            // reparse without the VS window regaining real OS focus - confirmed by waiting 3+ minutes
+            // with zero effect, and by 4 repeated flag-only invalidation calls in a row also having
+            // zero effect. But a genuine ReplaceText() call - even one that immediately preceded those
+            // same no-op flag-only calls in the same test - fixed the staleness INSTANTLY with zero
+            // focus needed. ReplaceText goes through PSI's normal synchronous document-change pipeline;
+            // a bare dirty-flag apparently does not reliably reach the daemon's reparse trigger without
+            // a focus-driven message-pump tick. Replacing text with itself when it already matches is a
+            // deliberate, cheap way to force that same reliable pipeline every time, not just when the
+            // text happens to differ.
+            document.ReplaceText(new TextRange(0, document.GetTextLength()), diskText);
 
-            // Unconditional: the parsed PSI tree/symbol cache can be stale even when the document's
-            // own text already matched disk (observed directly - see DEVNOTES). MarkAsDirty mirrors
-            // what the platform's own file-system tracker does on an unsuspended external change.
+            // ExecuteWrite's outer PsiTransactionCookie asserts "all documents committed" when it
+            // auto-commits on dispose - ReplaceText alone leaves this document dirty, which used to
+            // throw JetBrains.Diagnostics.Assertion+AssertionException there instead of returning a
+            // result. Committing explicitly here, inside our own action, satisfies that assertion.
+            _solution.GetPsiServices().Files.CommitAllDocuments();
+
+            // Still called too: cheap, unconditional, and matches what the platform's own
+            // file-system tracker does on an unsuspended external change - kept as a belt-and-braces
+            // fallback alongside the ReplaceText fix above, not relied on alone anymore.
             var psiFiles = _solution.GetPsiServices().Files;
             psiFiles.MarkAsDirty(sourceFile);
             psiFiles.InvalidatePsiFilesCache(sourceFile);
 
             return textChanged
                 ? $"{filePath} - text resynced from disk ({currentText.Length} -> {diskText.Length} chars) and PSI cache invalidated."
-                : $"{filePath} - text already matched disk; PSI cache invalidated (forced reparse).";
+                : $"{filePath} - text already matched disk; forced a same-content reparse anyway (see docs/DEVNOTES.md - flag-only invalidation was found unreliable without real window focus).";
         }
     }
 }
