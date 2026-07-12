@@ -23,10 +23,19 @@ namespace XC.VsResharperMcpServer.Core.Tools
 {
     // New in M7 (not from the reference repo - see docs/DEVNOTES.md). Extract a range of statements
     // into a new method (or property/local function/chained constructor, when ReSharper itself would
-    // also offer those as options for the same selection). NOT LIVE-TESTED - written and reasoned
-    // through entirely via decompilation (ilspycmd against the real installed
-    // JetBrains.ReSharper.Refactorings.CSharp.dll), during an autonomous unsupervised session with no
-    // VS instance available to run it against. Compiles clean; behavior is unverified.
+    // also offer those as options for the same selection). Originally written and reasoned through
+    // entirely via decompilation (ilspycmd against the real installed
+    // JetBrains.ReSharper.Refactorings.CSharp.dll) during an autonomous unsupervised session with no VS
+    // instance available.
+    //
+    // LIVE-TESTED (2026-07-12, see docs/DEVNOTES.md): dry run and real apply both confirmed correct on
+    // a real two-statement extraction (parameter/return-value inference both right, call site correctly
+    // rewritten, 0 diagnostics on the result) - but only after a real bug was found and fixed. The very
+    // first live attempt threw a NullReferenceException deep inside the SDK's own call-site
+    // reformatting step (not this tool's code) because no IModuleReferenceResolveContext was
+    // established on this headless dispatch thread - fixed centrally in PsiThreadDispatcher via
+    // CompilationContextCookie.GetExplicitUniversalContextIfNotSet(), which benefits every tool, not
+    // just this one. See PsiThreadDispatcher.cs's own doc comment for the full root-cause writeup.
     //
     // Unlike rename_symbol/change_signature/inline_variable, this does NOT go through
     // Initialize(IDataContext) at all - CSharpExtractMethodFromStatementsWorkflow.IsAvailable has a

@@ -20,10 +20,10 @@ namespace XC.VsResharperMcpServer.Host
     // sync_file_from_disk + list_solutions + 4 refactorings beyond rename (M7: inline_variable,
     // change_signature, extract_method, move_type) + generate_xml_doc (M9) + code_metrics (M10) +
     // structural_search (M8 spike, search only) + fix_usings' project/solution scope extension (M9,
-    // same tool, not a new registration). All confirmed live-tested and working as of 2026-07-12 except
-    // extract_method (a real, non-hang SDK NullReferenceException found and fixed via
-    // CompilationContextCookie in PsiThreadDispatcher, not yet re-verified live) and structural_search's
-    // replace mode (not yet implemented) - see docs/DEVNOTES.md. safe_delete was
+    // same tool, not a new registration). All confirmed live-tested and working as of 2026-07-12 -
+    // see docs/DEVNOTES.md, including the CompilationContextCookie fix (in PsiThreadDispatcher, applies
+    // to every tool) that a real extract_method SDK NullReferenceException led to. structural_search's
+    // replace mode is not yet implemented. safe_delete was
     // implemented then dropped - see docs/DEVNOTES.md "safe_delete dropped" entry.
     //
     // Also where the HTTP server's port actually gets bound (McpShellComponent.EnsureStarted) -
@@ -354,7 +354,7 @@ namespace XC.VsResharperMcpServer.Host
                     new McpServerToolCreateOptions
                     {
                         Name = "extract_method",
-                        Description = "WRITE, NOT LIVE-TESTED YET (see docs/DEVNOTES.md): extract a range of " +
+                        Description = "WRITE: extract a range of " +
                             "statements into a new method (or property/local function/chained constructor, " +
                             "whichever ReSharper itself would also offer for this exact selection). Give the " +
                             "1-based statement range via startLine/startColumn/endLine/endColumn - the selection " +
