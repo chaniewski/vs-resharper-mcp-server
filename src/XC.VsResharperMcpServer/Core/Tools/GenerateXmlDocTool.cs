@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using JetBrains.Application.Threading;
 using JetBrains.ProjectModel;
@@ -7,6 +8,7 @@ using JetBrains.ReSharper.Psi.CSharp;
 using JetBrains.ReSharper.Psi.CSharp.Tree;
 using JetBrains.ReSharper.Psi.CSharp.Util;
 using JetBrains.ReSharper.Psi.Tree;
+using JetBrains.ReSharper.Psi.Util;
 using XC.VsResharperMcpServer.Core.Psi;
 
 namespace XC.VsResharperMcpServer.Core.Tools
@@ -170,8 +172,26 @@ namespace XC.VsResharperMcpServer.Core.Tools
             if (string.IsNullOrWhiteSpace(template))
                 return (false, "no doc template content for this declaration kind");
 
+            // GetDocTemplate returns sibling top-level elements (<summary>, <param>, ...) with no
+            // single root, so wrapping in <member> is required for XMLDocUtil.Load to parse it at all -
+            // but CreateDocCommentBlock must NOT receive that wrapper verbatim, or the literal
+            // "<member>"/"</member>" tags render as real /// lines in the generated comment (found live,
+            // 2026-07-12 - see docs/DEVNOTES.md). The real two-step process, confirmed by decompiling
+            // CSharpXmlDocumentationInitializer.CreateCommentsForOperator (which does exactly this, not
+            // a direct CreateDocCommentBlock(wrappedText) call as first assumed): parse the wrapped text
+            // into a real XmlNode via XMLDocUtil.Load, then re-serialize via
+            // XmlDocPresenterUtil.LayoutXml - which specifically special-cases a "member"-named root by
+            // recursing into its children WITHOUT writing the "member" tags themselves, correctly
+            // stripping the wrapper back out.
+            var wrapped = new StringBuilder("<member>\r\n").Append(template).Append("</member>");
+            if (!XMLDocUtil.Load(wrapped, out var xmlNode))
+                return (false, "generated XML doc template failed to parse (unexpected - please report)");
+
+            var writer = new StringWriter();
+            XmlDocPresenterUtil.LayoutXml(xmlNode, writer);
+
             var factory = CSharpElementFactory.GetInstance(memberDecl);
-            var docCommentBlock = factory.CreateDocCommentBlock("<member>\r\n" + template + "</member>");
+            var docCommentBlock = factory.CreateDocCommentBlock(writer.ToString());
             owner.SetDocCommentBlock(docCommentBlock);
 
             return (true, null);
