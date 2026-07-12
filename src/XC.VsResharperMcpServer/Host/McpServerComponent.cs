@@ -16,15 +16,19 @@ namespace XC.VsResharperMcpServer.Host
 {
     // Per-solution. Constructs ISolution-bound tool instances and adds them to the single
     // process-wide MCP server's ToolCollection (owned by McpShellComponent) on solution open;
-    // removes them on solution close. 32 tools total: 15 read (M2+M3) + 7 write (M4) +
-    // sync_file_from_disk + list_solutions + 4 refactorings beyond rename (M7: inline_variable,
-    // change_signature, extract_method, move_type) + generate_xml_doc (M9) + code_metrics (M10) +
-    // structural_search (M8, search AND replace mode) + fix_usings' project/solution scope extension
-    // (M9, same tool, not a new registration). All 32 tools confirmed live-tested and working as of
-    // 2026-07-12 - see docs/DEVNOTES.md, including the CompilationContextCookie fix (in
-    // PsiThreadDispatcher, applies to every tool) that a real extract_method SDK NullReferenceException
-    // led to. safe_delete was
-    // implemented then dropped - see docs/DEVNOTES.md "safe_delete dropped" entry.
+    // removes them on solution close. 28 tools REGISTERED (down from 32 - see below) + fix_usings'
+    // project/solution scope extension (M9, same tool, not a new registration). All registered tools
+    // confirmed live-tested and working as of 2026-07-12 - see docs/DEVNOTES.md, including the
+    // CompilationContextCookie fix (in PsiThreadDispatcher, applies to every tool) that a real
+    // extract_method SDK NullReferenceException led to.
+    //
+    // Three tools DISABLED 2026-07-12 (see docs/DEVNOTES.md "flaky and low-value tools" review) -
+    // commented out below rather than deleted, so re-enabling later is a small diff, not a rewrite:
+    // get_file_errors (redundant with, and less reliable than, get_diagnostics), complete_at
+    // (structurally can never return a useful result headlessly, and near-zero agent value even if it
+    // could), structural_search (confirmed to hang the same PSI-lock-wedge way apply_quick_fix did,
+    // not yet fixed). One tool DROPPED entirely (not disabled - no working implementation to keep):
+    // safe_delete - see docs/DEVNOTES.md "safe_delete dropped" entry.
     //
     // Also where the HTTP server's port actually gets bound (McpShellComponent.EnsureStarted) -
     // deliberately deferred to here (not eager at shell-construction time) so this solution's
@@ -156,13 +160,21 @@ namespace XC.VsResharperMcpServer.Host
                             "member. Returns the locations of all concrete implementations in the solution, " +
                             "distinguishing direct implementations from indirect ones (via intermediate interfaces)."
                     }),
-                McpServerTool.Create((Func<string, string>)getFileErrors.Execute,
-                    new McpServerToolCreateOptions
-                    {
-                        Name = "get_file_errors",
-                        Description = "Get compile errors and unresolved references in a file by walking the PSI " +
-                            "tree. Returns error elements with their location and description."
-                    }),
+                // get_file_errors DISABLED 2026-07-12 (see docs/DEVNOTES.md - the "flaky and low-value
+                // tools" review): confirmed live to false-positive on tuple deconstruction syntax
+                // ("Cannot resolve symbol 'Deconstruct'" on code that compiles and runs fine), and its
+                // raw PSI-tree-walk approach is a strictly cruder duplicate of get_diagnostics, which is
+                // daemon-based, more authoritative, and didn't false-positive on the same file. No
+                // scenario found where this tool would be reached for over get_diagnostics. GetFileErrorsTool
+                // itself is untouched - re-registering here is all that's needed to bring it back if a
+                // real, distinct use case turns up.
+                // McpServerTool.Create((Func<string, string>)getFileErrors.Execute,
+                //     new McpServerToolCreateOptions
+                //     {
+                //         Name = "get_file_errors",
+                //         Description = "Get compile errors and unresolved references in a file by walking the PSI " +
+                //             "tree. Returns error elements with their location and description."
+                //     }),
                 McpServerTool.Create((Func<string, string>)browseNamespace.Execute,
                     new McpServerToolCreateOptions
                     {
@@ -277,14 +289,24 @@ namespace XC.VsResharperMcpServer.Host
                             "'inspectionIds' or pass all=true. Only headlessly-applicable (scoped) fixes are " +
                             "applied; others are reported as skipped. Pass dryRun=true to preview."
                     }),
-                McpServerTool.Create((Func<string, int, int, int, string>)completeAt.Execute,
-                    new McpServerToolCreateOptions
-                    {
-                        Name = "complete_at",
-                        Description = "RISKY/best-effort, read-only: get code completion suggestions at a " +
-                            "position (LSP textDocument/completion parity). May return an empty list when run " +
-                            "outside an interactive editing session."
-                    }),
+                // complete_at DISABLED 2026-07-12 (see docs/DEVNOTES.md - the "flaky and low-value tools"
+                // review): this server only ever runs headless, and complete_at's own documented behavior
+                // is to return an empty list whenever run outside an interactive editing session - i.e.
+                // it can structurally never return a useful result in this server's actual deployment
+                // context (confirmed live: every real test returned 0 completion items with exactly that
+                // note). Also close to zero conceivable agent value even if it did work - ranked
+                // completion-suggestion lists are an interactive-typing UX affordance, not something an
+                // agent that writes complete expressions/statements directly benefits from.
+                // CompleteAtTool itself is untouched - re-registering here is all that's needed if that
+                // ever changes.
+                // McpServerTool.Create((Func<string, int, int, int, string>)completeAt.Execute,
+                //     new McpServerToolCreateOptions
+                //     {
+                //         Name = "complete_at",
+                //         Description = "RISKY/best-effort, read-only: get code completion suggestions at a " +
+                //             "position (LSP textDocument/completion parity). May return an empty list when run " +
+                //             "outside an interactive editing session."
+                //     }),
                 McpServerTool.Create((Func<string, string, string, int, int, bool, string>)inlineVariable.Execute,
                     new McpServerToolCreateOptions
                     {
@@ -334,26 +356,43 @@ namespace XC.VsResharperMcpServer.Host
                             "starts at 1, +1 per if/else-if, loop, catch clause, &&, ||, ?:, ??, and each " +
                             "switch case/arm - a plain PSI-tree walk, not a live daemon inspection."
                     }),
-                McpServerTool.Create((Func<string, string, string, int, bool, string>)structuralSearch.Execute,
-                    new McpServerToolCreateOptions
-                    {
-                        Name = "structural_search",
-                        Description = "Search for, or replace, code matching a ReSharper Structural Search " +
-                            "pattern (AST-structural, not text/regex - e.g. \"$expr$.ToString()\" matches any " +
-                            "ToString() call regardless of formatting/receiver expression complexity; $name$ " +
-                            "placeholders match any sub-element and are auto-guessed from context, matching whole " +
-                            "sub-expressions not just identifiers). Omit 'filePath' to search/replace across the " +
-                            "whole solution, or scope to one file. SEARCH MODE (omit 'replacement'): READ-ONLY, " +
-                            "confirmed live for literal patterns and simple placeholder patterns (see " +
-                            "docs/DEVNOTES.md) - more elaborate patterns (statement/type/attribute-kind, multiple " +
-                            "placeholders, nested structure) remain untested. REPLACE MODE (provide " +
-                            "'replacement', an SSR replace pattern reusing the same $name$ placeholders from " +
-                            "'pattern'): WRITE, confirmed live for a placeholder-based method-call replacement " +
-                            "(see docs/DEVNOTES.md) - dryRun defaults to true, pass dryRun=false to actually apply. " +
-                            "CAUTION for both modes: a wrong-but-parseable pattern can silently return/replace the " +
-                            "wrong thing rather than erroring for pattern shapes not yet tried - treat output with " +
-                            "real skepticism until tried against known patterns with known expected results."
-                    }),
+                // structural_search DISABLED 2026-07-12 (see docs/DEVNOTES.md - the "flaky and low-value
+                // tools" review, plus the earlier apply_quick_fix PSI-lock wedge investigation): search
+                // mode confirmed live to HANG reproducibly (pattern "$x$.GetHashCode()" scoped to a file
+                // with real GetHashCode() calls, 120s+, twice) - the same severity class of failure as
+                // the apply_quick_fix wedge (every other PSI-lock-dependent tool call queues behind it
+                // until devenv.exe is restarted), just not yet root-caused/fixed the same way. Two
+                // further SSR pattern-shape gaps are also open ("$x$ == null" fails to parse; "throw new
+                // $type$($msg$)" silently returns "not completed"). Disabling BOTH modes, not just
+                // search: replace mode was only ever live-tested with one specific, benign pattern, and
+                // shares enough of the same underlying pattern-matching internals (StructuralSearchRequest)
+                // that there's no confirmed-safe boundary between the two - "disable the whole tool until
+                // it's fixed" matches this project's established default-safe posture (see the safe_delete
+                // removal and the original apply_quick_fix blocklist reasoning) rather than risking a
+                // partial fix based on an untested assumption. StructuralSearchTool itself is untouched -
+                // re-registering here (after applying the same kind of fix apply_quick_fix got: root-cause
+                // the hang via decompilation, likely a read/write dispatch review) is what would bring it
+                // back.
+                // McpServerTool.Create((Func<string, string, string, int, bool, string>)structuralSearch.Execute,
+                //     new McpServerToolCreateOptions
+                //     {
+                //         Name = "structural_search",
+                //         Description = "Search for, or replace, code matching a ReSharper Structural Search " +
+                //             "pattern (AST-structural, not text/regex - e.g. \"$expr$.ToString()\" matches any " +
+                //             "ToString() call regardless of formatting/receiver expression complexity; $name$ " +
+                //             "placeholders match any sub-element and are auto-guessed from context, matching whole " +
+                //             "sub-expressions not just identifiers). Omit 'filePath' to search/replace across the " +
+                //             "whole solution, or scope to one file. SEARCH MODE (omit 'replacement'): READ-ONLY, " +
+                //             "confirmed live for literal patterns and simple placeholder patterns (see " +
+                //             "docs/DEVNOTES.md) - more elaborate patterns (statement/type/attribute-kind, multiple " +
+                //             "placeholders, nested structure) remain untested. REPLACE MODE (provide " +
+                //             "'replacement', an SSR replace pattern reusing the same $name$ placeholders from " +
+                //             "'pattern'): WRITE, confirmed live for a placeholder-based method-call replacement " +
+                //             "(see docs/DEVNOTES.md) - dryRun defaults to true, pass dryRun=false to actually apply. " +
+                //             "CAUTION for both modes: a wrong-but-parseable pattern can silently return/replace the " +
+                //             "wrong thing rather than erroring for pattern shapes not yet tried - treat output with " +
+                //             "real skepticism until tried against known patterns with known expected results."
+                //     }),
                 McpServerTool.Create((Func<string, int, int, int, int, string, string, bool, string>)extractMethod.Execute,
                     new McpServerToolCreateOptions
                     {
