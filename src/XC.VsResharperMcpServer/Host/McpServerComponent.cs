@@ -19,11 +19,11 @@ namespace XC.VsResharperMcpServer.Host
     // removes them on solution close. 32 tools total: 15 read (M2+M3) + 7 write (M4) +
     // sync_file_from_disk + list_solutions + 4 refactorings beyond rename (M7: inline_variable,
     // change_signature, extract_method, move_type) + generate_xml_doc (M9) + code_metrics (M10) +
-    // structural_search (M8 spike, search only) + fix_usings' project/solution scope extension (M9,
-    // same tool, not a new registration). All confirmed live-tested and working as of 2026-07-12 -
-    // see docs/DEVNOTES.md, including the CompilationContextCookie fix (in PsiThreadDispatcher, applies
-    // to every tool) that a real extract_method SDK NullReferenceException led to. structural_search's
-    // replace mode is not yet implemented. safe_delete was
+    // structural_search (M8, search AND replace mode) + fix_usings' project/solution scope extension
+    // (M9, same tool, not a new registration). All 32 tools confirmed live-tested and working as of
+    // 2026-07-12 - see docs/DEVNOTES.md, including the CompilationContextCookie fix (in
+    // PsiThreadDispatcher, applies to every tool) that a real extract_method SDK NullReferenceException
+    // led to. safe_delete was
     // implemented then dropped - see docs/DEVNOTES.md "safe_delete dropped" entry.
     //
     // Also where the HTTP server's port actually gets bound (McpShellComponent.EnsureStarted) -
@@ -334,21 +334,25 @@ namespace XC.VsResharperMcpServer.Host
                             "starts at 1, +1 per if/else-if, loop, catch clause, &&, ||, ?:, ??, and each " +
                             "switch case/arm - a plain PSI-tree walk, not a live daemon inspection."
                     }),
-                McpServerTool.Create((Func<string, string, int, string>)structuralSearch.Execute,
+                McpServerTool.Create((Func<string, string, string, int, bool, string>)structuralSearch.Execute,
                     new McpServerToolCreateOptions
                     {
                         Name = "structural_search",
-                        Description = "READ-ONLY M8 SPIKE: search " +
-                            "for code matching a ReSharper Structural Search pattern (AST-structural, not text/" +
-                            "regex - e.g. \"$expr$.ToString()\" matches any ToString() call regardless of " +
-                            "formatting/receiver expression complexity; $name$ placeholders match any " +
-                            "sub-element and are auto-guessed from context, matching whole sub-expressions not " +
-                            "just identifiers). Omit 'filePath' to search the whole solution, or scope to one " +
-                            "file. Confirmed live for literal patterns and simple placeholder patterns " +
-                            "(see docs/DEVNOTES.md) - more elaborate patterns (statement/type/attribute-kind, " +
-                            "multiple placeholders, nested structure) remain untested; a wrong-but-parseable " +
-                            "pattern can silently return the wrong result set rather than erroring. No replace " +
-                            "- search only, per the M8 spike's own scope."
+                        Description = "Search for, or replace, code matching a ReSharper Structural Search " +
+                            "pattern (AST-structural, not text/regex - e.g. \"$expr$.ToString()\" matches any " +
+                            "ToString() call regardless of formatting/receiver expression complexity; $name$ " +
+                            "placeholders match any sub-element and are auto-guessed from context, matching whole " +
+                            "sub-expressions not just identifiers). Omit 'filePath' to search/replace across the " +
+                            "whole solution, or scope to one file. SEARCH MODE (omit 'replacement'): READ-ONLY, " +
+                            "confirmed live for literal patterns and simple placeholder patterns (see " +
+                            "docs/DEVNOTES.md) - more elaborate patterns (statement/type/attribute-kind, multiple " +
+                            "placeholders, nested structure) remain untested. REPLACE MODE (provide " +
+                            "'replacement', an SSR replace pattern reusing the same $name$ placeholders from " +
+                            "'pattern'): WRITE, confirmed live for a placeholder-based method-call replacement " +
+                            "(see docs/DEVNOTES.md) - dryRun defaults to true, pass dryRun=false to actually apply. " +
+                            "CAUTION for both modes: a wrong-but-parseable pattern can silently return/replace the " +
+                            "wrong thing rather than erroring for pattern shapes not yet tried - treat output with " +
+                            "real skepticism until tried against known patterns with known expected results."
                     }),
                 McpServerTool.Create((Func<string, int, int, int, int, string, string, bool, string>)extractMethod.Execute,
                     new McpServerToolCreateOptions
