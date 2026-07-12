@@ -1,16 +1,17 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
-using JetBrains.Application.Progress;
+using JetBrains.Annotations;
 using JetBrains.Application.Threading;
 using JetBrains.DocumentManagers;
 using JetBrains.ProjectModel;
 using JetBrains.ReSharper.Feature.Services.CSharp.StructuralSearch;
 using JetBrains.ReSharper.Feature.Services.StructuralSearch;
-using JetBrains.ReSharper.Feature.Services.StructuralSearch.Finding;
+using JetBrains.ReSharper.Feature.Services.StructuralSearch.Impl;
 using JetBrains.ReSharper.Psi;
 using JetBrains.ReSharper.Psi.Search;
 using JetBrains.ReSharper.Psi.Transactions;
+using JetBrains.ReSharper.Psi.Tree;
 using XC.VsResharperMcpServer.Core.Psi;
 
 namespace XC.VsResharperMcpServer.Core.Tools
@@ -27,6 +28,19 @@ namespace XC.VsResharperMcpServer.Core.Tools
     // GuessPlaceholders() is the SDK's own separate, public step that resolves each one by trying a
     // SEPARATE guessPlaceholders: true builder array - found live via a real failing test, fixed, then
     // confirmed fixed by the same test.
+    //
+    // PSI-LOCK WEDGE HANG - ROOT-CAUSED AND FIXED (2026-07-12, see docs/DEVNOTES.md "structural_search
+    // hang - root cause and fix"): certain patterns (e.g. "$x$.GetHashCode()") permanently wedged the
+    // PSI lock, same failure class as the earlier apply_quick_fix hang. Root cause (confirmed via
+    // decompilation, not guessed): the SDK's own StructuralSearchRequest.SearchReplaceTargets() always
+    // drives its domain traversal through StructuralSearchDomainSearcher<TResult>, which derives from
+    // SearchDomainVisitorParallel - an ASYNC multi-threaded fan-out (PsiTaskBarrier.CreateRead with
+    // sync: false) designed for an interactive, message-pumped host thread. Called from this plugin's
+    // headless dispatch thread, the fanned-out per-file jobs never get scheduled and the wait blocks
+    // forever. Fix: SearchReplaceTargetsSequential() below reimplements the same search using the
+    // plain, synchronous SearchDomainVisitor base class instead - see its doc comment for the full
+    // decompilation trail. No SDK/locking behavior was changed; only which traversal entry point this
+    // tool calls.
     //
     // REPLACE MODE: added by extending this same tool rather than a separate one, since it reuses 100%
     // of the search-domain/pattern-construction logic above - only the final step differs (mutate
@@ -120,13 +134,10 @@ namespace XC.VsResharperMcpServer.Core.Tools
             var (ssrPattern, searchDomain, error) = BuildRequest(pattern, filePath);
             if (error != null) return error;
 
-            var searchDomainFactory = _solution.GetPsiServices().SearchDomainFactory;
-            var request = new StructuralSearchRequest(_solution, _documentManager, searchDomainFactory, searchDomain, ssrPattern);
-
             IList<IStructuralMatchResult> matches;
             try
             {
-                matches = request.SearchReplaceTargets(NullProgressIndicator.Create());
+                matches = SearchReplaceTargetsSequential(ssrPattern, searchDomain);
             }
             catch (Exception ex)
             {
@@ -189,13 +200,10 @@ namespace XC.VsResharperMcpServer.Core.Tools
             ssrPattern.FormatAfterReplace = true;
             ssrPattern.ShortenReferences = true;
 
-            var searchDomainFactory = _solution.GetPsiServices().SearchDomainFactory;
-            var request = new StructuralSearchRequest(_solution, _documentManager, searchDomainFactory, searchDomain, ssrPattern);
-
             IList<IStructuralMatchResult> matches;
             try
             {
-                matches = request.SearchReplaceTargets(NullProgressIndicator.Create());
+                matches = SearchReplaceTargetsSequential(ssrPattern, searchDomain);
             }
             catch (Exception ex)
             {
@@ -249,6 +257,124 @@ namespace XC.VsResharperMcpServer.Core.Tools
                 }
 
                 return sb.ToString().TrimEnd();
+            }
+        }
+
+        // HANG FIX (2026-07-12, see docs/DEVNOTES.md "structural_search hang - root cause and fix"):
+        // this reimplements JetBrains.ReSharper.Feature.Services.StructuralSearch.Finding.
+        // StructuralSearchRequest.SearchReplaceTargets()/DoSearch() rather than calling it directly.
+        // Root-caused via decompilation: StructuralSearchRequest.DoSearch() always drives the domain
+        // traversal through StructuralSearchDomainSearcher<TResult>, which derives from
+        // JetBrains.ReSharper.Psi.Search.SearchDomainVisitorParallel - NOT the plain synchronous
+        // SearchDomainVisitor. SearchDomainVisitorParallel.Run() opens a
+        // JetBrains.ReSharper.Psi.Threading.PsiTaskBarrier.CreateRead(..., sync: false, takeReadLock:
+        // true, ...) and enqueues one job per source file onto it, then blocks (via the barrier's
+        // dispose/WaitAll) until every enqueued job completes. That's an async multi-threaded fan-out
+        // designed to run from an interactive, message-pumped context (the real VS/Rider UI thread) so
+        // the worker jobs can actually get scheduled and each independently re-acquire a nested read
+        // lock. Called from this plugin's headless dispatch thread (PsiThreadDispatcher.ExecuteRead,
+        // itself already holding the one read lock via IShellLocks.ExecuteOrQueueReadLock, with no
+        // message pump running underneath it), the enqueued per-file jobs never get a chance to run and
+        // the outer wait blocks forever - the same "interactive-only SDK path called headlessly wedges
+        // the PSI lock" failure class already hit and fixed for apply_quick_fix, just via a different
+        // SDK entry point this time (parallel task-barrier fan-out instead of a live-template hotspot
+        // session).
+        //
+        // The fix does not touch locking/threading at all - it avoids the parallel fan-out entirely.
+        // SearchDomainVisitor (the non-Parallel base class SearchDomainVisitorParallel itself derives
+        // from) is a plain, synchronous, single-threaded visitor: ISearchDomain.Accept(visitor) just
+        // walks modules/files/elements via ordinary recursive method calls on the calling thread, no
+        // task barrier, no extra locking. SequentialStructuralSearchVisitor below is a from-scratch
+        // subclass of that plain base, calling the exact same StructuralSearcher.ProcessProjectItem/
+        // ProcessElement methods StructuralSearchDomainSearcher<TResult> calls internally (both public,
+        // confirmed via decompilation) - so matching semantics are identical, only the traversal
+        // mechanism changes from async-fan-out to synchronous-inline. NarrowSearchDomain below is a
+        // verbatim port of StructuralSearchRequest's own private word-index narrowing step (kept for
+        // parity/performance on large solutions), using only public IWordIndex/SearchDomainFactory APIs.
+        [CanBeNull]
+        private IList<IStructuralMatchResult> SearchReplaceTargetsSequential(IStructuralSearchPattern ssrPattern, ISearchDomain searchDomain)
+        {
+            var structuralMatcher = ssrPattern.CreateMatcher();
+            if (structuralMatcher == null)
+                return null;
+
+            var searcher = new StructuralSearcher(_documentManager, ssrPattern.Language, structuralMatcher);
+            var narrowedDomain = NarrowSearchDomain(searchDomain, structuralMatcher.Words, structuralMatcher.GetExtendedWords(_solution));
+
+            var results = new List<IStructuralMatchResult>();
+            var consumer = new FindResultConsumer<IStructuralMatchResult>(
+                result => (result is FindResultStructural { DocumentRange: var documentRange } findResultStructural && documentRange.IsValid())
+                    ? findResultStructural.MatchResult
+                    : null,
+                match =>
+                {
+                    if (match != null) results.Add(match);
+                    return FindExecution.Continue;
+                });
+
+            var visitor = new SequentialStructuralSearchVisitor(searcher, consumer);
+            narrowedDomain.Accept(visitor);
+            return results;
+        }
+
+        // Verbatim port of StructuralSearchRequest's private NarrowSearchDomain - see doc comment above.
+        private ISearchDomain NarrowSearchDomain(ISearchDomain domain, IReadOnlyCollection<string> words, IReadOnlyCollection<string> extendedWords)
+        {
+            if (domain.IsEmpty || words.Count == 0)
+                return domain;
+
+            var wordIndex = _solution.GetPsiServices().WordIndex;
+            IEnumerable<IPsiSourceFile> files = wordIndex.GetFilesContainingAllWords(words);
+
+            if (extendedWords.Count > 0)
+            {
+                var narrowed = new HashSet<IPsiSourceFile>();
+                foreach (var file in files)
+                {
+                    foreach (var extendedWord in extendedWords)
+                    {
+                        if (wordIndex.CanContainAllSubwords(file, extendedWord))
+                        {
+                            narrowed.Add(file);
+                            break;
+                        }
+                    }
+                }
+                files = narrowed;
+            }
+
+            var searchDomainFactory = _solution.GetPsiServices().SearchDomainFactory;
+            return domain.Intersect(searchDomainFactory.CreateSearchDomain(files));
+        }
+
+        // Plain, synchronous SearchDomainVisitor subclass - see the hang-fix doc comment above for why
+        // this exists instead of using the SDK's own StructuralSearchDomainSearcher<TResult>.
+        private sealed class SequentialStructuralSearchVisitor : SearchDomainVisitor
+        {
+            private readonly IStructuralSearcher _searcher;
+            private readonly IFindResultConsumer<IStructuralMatchResult> _consumer;
+            private bool _finished;
+
+            public SequentialStructuralSearchVisitor(IStructuralSearcher searcher, IFindResultConsumer<IStructuralMatchResult> consumer)
+            {
+                _searcher = searcher;
+                _consumer = consumer;
+            }
+
+            public override bool ProcessingIsFinished => _finished;
+
+            public override void VisitPsiSourceFile(IPsiSourceFile sourceFile)
+            {
+                if (_finished) return;
+                if (_searcher.ProcessProjectItem(sourceFile, _consumer))
+                    _finished = true;
+            }
+
+            public override void VisitElement(ITreeNode element)
+            {
+                if (_finished) return;
+                if (_searcher.ProcessElement(element, _consumer))
+                    _finished = true;
             }
         }
     }

@@ -16,19 +16,20 @@ namespace XC.VsResharperMcpServer.Host
 {
     // Per-solution. Constructs ISolution-bound tool instances and adds them to the single
     // process-wide MCP server's ToolCollection (owned by McpShellComponent) on solution open;
-    // removes them on solution close. 28 tools REGISTERED (down from 32 - see below) + fix_usings'
+    // removes them on solution close. 29 tools REGISTERED (down from 32 - see below) + fix_usings'
     // project/solution scope extension (M9, same tool, not a new registration). All registered tools
     // confirmed live-tested and working as of 2026-07-12 - see docs/DEVNOTES.md, including the
     // CompilationContextCookie fix (in PsiThreadDispatcher, applies to every tool) that a real
     // extract_method SDK NullReferenceException led to.
     //
-    // Three tools DISABLED 2026-07-12 (see docs/DEVNOTES.md "flaky and low-value tools" review) -
+    // Two tools DISABLED 2026-07-12 (see docs/DEVNOTES.md "flaky and low-value tools" review) -
     // commented out below rather than deleted, so re-enabling later is a small diff, not a rewrite:
     // get_file_errors (redundant with, and less reliable than, get_diagnostics), complete_at
     // (structurally can never return a useful result headlessly, and near-zero agent value even if it
-    // could), structural_search (confirmed to hang the same PSI-lock-wedge way apply_quick_fix did,
-    // not yet fixed). One tool DROPPED entirely (not disabled - no working implementation to keep):
-    // safe_delete - see docs/DEVNOTES.md "safe_delete dropped" entry.
+    // could). structural_search was disabled the same day for hanging the same PSI-lock-wedge way
+    // apply_quick_fix did, then RE-ENABLED after the hang was root-caused and fixed (see the tool's
+    // own registration comment below and docs/DEVNOTES.md). One tool DROPPED entirely (not disabled -
+    // no working implementation to keep): safe_delete - see docs/DEVNOTES.md "safe_delete dropped" entry.
     //
     // Also where the HTTP server's port actually gets bound (McpShellComponent.EnsureStarted) -
     // deliberately deferred to here (not eager at shell-construction time) so this solution's
@@ -360,43 +361,40 @@ namespace XC.VsResharperMcpServer.Host
                             "starts at 1, +1 per if/else-if, loop, catch clause, &&, ||, ?:, ??, and each " +
                             "switch case/arm - a plain PSI-tree walk, not a live daemon inspection."
                     }),
-                // structural_search DISABLED 2026-07-12 (see docs/DEVNOTES.md - the "flaky and low-value
-                // tools" review, plus the earlier apply_quick_fix PSI-lock wedge investigation): search
-                // mode confirmed live to HANG reproducibly (pattern "$x$.GetHashCode()" scoped to a file
-                // with real GetHashCode() calls, 120s+, twice) - the same severity class of failure as
-                // the apply_quick_fix wedge (every other PSI-lock-dependent tool call queues behind it
-                // until devenv.exe is restarted), just not yet root-caused/fixed the same way. Two
-                // further SSR pattern-shape gaps are also open ("$x$ == null" fails to parse; "throw new
-                // $type$($msg$)" silently returns "not completed"). Disabling BOTH modes, not just
-                // search: replace mode was only ever live-tested with one specific, benign pattern, and
-                // shares enough of the same underlying pattern-matching internals (StructuralSearchRequest)
-                // that there's no confirmed-safe boundary between the two - "disable the whole tool until
-                // it's fixed" matches this project's established default-safe posture (see the safe_delete
-                // removal and the original apply_quick_fix blocklist reasoning) rather than risking a
-                // partial fix based on an untested assumption. StructuralSearchTool itself is untouched -
-                // re-registering here (after applying the same kind of fix apply_quick_fix got: root-cause
-                // the hang via decompilation, likely a read/write dispatch review) is what would bring it
-                // back.
-                // McpServerTool.Create((Func<string, string, string, int, bool, string>)structuralSearch.Execute,
-                //     new McpServerToolCreateOptions
-                //     {
-                //         Name = "structural_search",
-                //         Description = "Search for, or replace, code matching a ReSharper Structural Search " +
-                //             "pattern (AST-structural, not text/regex - e.g. \"$expr$.ToString()\" matches any " +
-                //             "ToString() call regardless of formatting/receiver expression complexity; $name$ " +
-                //             "placeholders match any sub-element and are auto-guessed from context, matching whole " +
-                //             "sub-expressions not just identifiers). Omit 'filePath' to search/replace across the " +
-                //             "whole solution, or scope to one file. SEARCH MODE (omit 'replacement'): READ-ONLY, " +
-                //             "confirmed live for literal patterns and simple placeholder patterns (see " +
-                //             "docs/DEVNOTES.md) - more elaborate patterns (statement/type/attribute-kind, multiple " +
-                //             "placeholders, nested structure) remain untested. REPLACE MODE (provide " +
-                //             "'replacement', an SSR replace pattern reusing the same $name$ placeholders from " +
-                //             "'pattern'): WRITE, confirmed live for a placeholder-based method-call replacement " +
-                //             "(see docs/DEVNOTES.md) - dryRun defaults to true, pass dryRun=false to actually apply. " +
-                //             "CAUTION for both modes: a wrong-but-parseable pattern can silently return/replace the " +
-                //             "wrong thing rather than erroring for pattern shapes not yet tried - treat output with " +
-                //             "real skepticism until tried against known patterns with known expected results."
-                //     }),
+                // structural_search RE-ENABLED 2026-07-12 (see docs/DEVNOTES.md "structural_search hang -
+                // root cause and fix"): the search-mode hang (pattern "$x$.GetHashCode()", 120s+, twice)
+                // was root-caused via decompilation - the SDK's own StructuralSearchRequest always drives
+                // domain traversal through an async multi-threaded task-barrier fan-out
+                // (SearchDomainVisitorParallel) designed for an interactive, message-pumped host thread,
+                // which never completes when called from this plugin's headless dispatch thread. Fixed by
+                // having StructuralSearchTool reimplement the same search using the SDK's plain synchronous
+                // SearchDomainVisitor instead (see StructuralSearchTool.SearchReplaceTargetsSequential doc
+                // comment for the full trail) - no locking/threading behavior was changed, just which SDK
+                // traversal entry point is called. Two further SSR pattern-shape gaps remain open and
+                // untouched by this fix ("$x$ == null" fails to parse; "throw new $type$($msg$)" silently
+                // returns "not completed") - unrelated to the hang, just unsupported pattern shapes.
+                McpServerTool.Create((Func<string, string, string, int, bool, string>)structuralSearch.Execute,
+                    new McpServerToolCreateOptions
+                    {
+                        Name = "structural_search",
+                        Description = "Search for, or replace, code matching a ReSharper Structural Search " +
+                            "pattern (AST-structural, not text/regex - e.g. \"$expr$.ToString()\" matches any " +
+                            "ToString() call regardless of formatting/receiver expression complexity; $name$ " +
+                            "placeholders match any sub-element and are auto-guessed from context, matching whole " +
+                            "sub-expressions not just identifiers). Omit 'filePath' to search/replace across the " +
+                            "whole solution, or scope to one file. SEARCH MODE (omit 'replacement'): READ-ONLY, " +
+                            "confirmed live for literal patterns and simple placeholder patterns, including the " +
+                            "pattern shape that previously hung (see docs/DEVNOTES.md) - more elaborate patterns " +
+                            "(statement/type/attribute-kind, multiple placeholders, nested structure) remain " +
+                            "untested, and some pattern shapes are known-unsupported (e.g. \"$x$ == null\" fails " +
+                            "to parse; \"throw new $type$($msg$)\" returns 'not completed'). REPLACE MODE (provide " +
+                            "'replacement', an SSR replace pattern reusing the same $name$ placeholders from " +
+                            "'pattern'): WRITE, confirmed live for a placeholder-based method-call replacement " +
+                            "(see docs/DEVNOTES.md) - dryRun defaults to true, pass dryRun=false to actually apply. " +
+                            "CAUTION for both modes: a wrong-but-parseable pattern can silently return/replace the " +
+                            "wrong thing rather than erroring for pattern shapes not yet tried - treat output with " +
+                            "real skepticism until tried against known patterns with known expected results."
+                    }),
                 McpServerTool.Create((Func<string, int, int, int, int, string, string, bool, string>)extractMethod.Execute,
                     new McpServerToolCreateOptions
                     {
