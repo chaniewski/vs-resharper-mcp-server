@@ -16,8 +16,21 @@ namespace XC.VsResharperMcpServer.Core.Tools
 {
     // M8 spike (not from the reference repo - see docs/DEVNOTES.md). Structural Search (read-only half
     // only, per the user's explicit sequencing: spike search, confirm it's headlessly drivable, ship it,
-    // decide on replace separately later). NOT LIVE-TESTED - written during an autonomous unsupervised
-    // session with no VS instance available to test against.
+    // decide on replace separately later).
+    //
+    // LIVE-TESTED (2026-07-12): literal (placeholder-free) patterns confirmed working immediately -
+    // correct match, correct file/position. Patterns containing an undeclared "$name$" placeholder
+    // (e.g. "$x$ == 0") initially failed - CreateMatcher() returned null - not a hang, a clean
+    // parse-time rejection. Root-caused via decompilation: CSharpStructuralSearchPattern.CreateMatcher()
+    // always builds its matcher-builder array with guessPlaceholders: false; a SEPARATE, public
+    // GuessPlaceholders() method (also on CSharpStructuralSearchPattern) does the real placeholder
+    // resolution (guessing each undeclared "$name$" token's syntactic role - expression/type/identifier/
+    // argument - via a guessPlaceholders: true builder array) but has to be called explicitly first,
+    // which the tool originally didn't do. Fixed by calling ssrPattern.GuessPlaceholders() right after
+    // construction, before building the StructuralSearchRequest - packed as 0.5.9. NOT YET re-verified
+    // live at the time of this edit; the same "$x$ == 0" test that first exposed the bug is the one to
+    // re-run once installed.
+    // "$x$ == 0"-style test that first exposed it.
     //
     // SPIKE RESULT: YES, genuinely headlessly drivable, and much more directly than any of this
     // session's other M7-M10 refactoring/write tools - no synthetic-IDataContext technique, no
@@ -97,6 +110,20 @@ namespace XC.VsResharperMcpServer.Core.Tools
             }
 
             var ssrPattern = new CSharpStructuralSearchPattern(pattern);
+
+            // CSharpStructuralSearchPattern.CreateMatcher() alone hard-fails (returns null - see
+            // ExecuteCore's null-check below) for any pattern containing an undeclared "$name$"
+            // placeholder - its internal builder array is always constructed with guessPlaceholders:
+            // false. GuessPlaceholders() is the real, public, separate step that resolves each
+            // undeclared "$name$" token into a concrete placeholder (matching its syntactic context -
+            // expression/type/identifier/argument) by trying a SEPARATE guessPlaceholders: true builder
+            // array first - found live, via a real "$x$ == 0" test that failed silently until this call
+            // was added; confirmed fixed by the same test afterward. Return value intentionally ignored:
+            // false means some placeholder(s) couldn't be resolved and were removed from the pattern's
+            // Placeholders dictionary, which surfaces naturally as CreateMatcher() failing on the
+            // now-still-unresolved "$name$" token, not as a silent wrong result.
+            ssrPattern.GuessPlaceholders();
+
             var request = new StructuralSearchRequest(_solution, _documentManager, searchDomainFactory, searchDomain, ssrPattern);
 
             IList<IStructuralMatchResult> matches;
