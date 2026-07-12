@@ -10,6 +10,23 @@ namespace XC.VsResharperMcpServer.Core.Tools
     // Generic version of resharper-mcp's McpServerComponent.ExecuteOnPsiThread (see docs/DEVNOTES.md) —
     // bridges a synchronous MCP tool call (running on an HTTP-dispatch thread) onto the ReSharper PSI
     // thread via IShellLocks, blocking the caller until the PSI-thread work completes or times out.
+    //
+    // Every dispatched action also runs inside CompilationContextCookie.GetExplicitUniversalContextIfNotSet()
+    // - found live (2026-07-12, see docs/DEVNOTES.md) via a real extract_method crash:
+    // ModuleReferenceResolveContextExtensions.GetRuntimeFeatures threw a NullReferenceException deep
+    // inside a code-style inspector (MultipleVariableDeclarationCodeStyleInspector, triggered by
+    // CodeStyleUtil.ApplyRecursive reformatting the extracted call site) because no
+    // IModuleReferenceResolveContext was set on this dispatch thread. When ReSharper runs interactively,
+    // the IDE establishes this "compilation context" (which target framework/configuration's runtime
+    // features are visible) as ambient state tied to the active document/editor; a headless dispatch
+    // like this one never goes through that setup path at all, so anything downstream that assumes a
+    // context is already explicit (CompilationContextCookie.IsContextExplicit()) NREs instead of
+    // gracefully falling back. GetExplicitUniversalContextIfNotSet() is the SDK's own purpose-built,
+    // public fix for exactly this gap - a no-op if a context is already explicit (reference-counted,
+    // decompiled and confirmed safe to nest/always apply), so it's applied here centrally for every
+    // tool's dispatch rather than patched into extract_method alone - any other tool that happens to
+    // walk into code-style/formatting/runtime-feature-checking code deep in the SDK could hit the exact
+    // same gap.
     public static class PsiThreadDispatcher
     {
         private const int ToolTimeoutSeconds = 120;
@@ -59,7 +76,10 @@ namespace XC.VsResharperMcpServer.Core.Tools
                 try
                 {
                     solution.GetPsiServices().Files.CommitAllDocuments();
-                    result = action();
+                    using (CompilationContextCookie.GetExplicitUniversalContextIfNotSet())
+                    {
+                        result = action();
+                    }
                 }
                 catch (Exception ex)
                 {
