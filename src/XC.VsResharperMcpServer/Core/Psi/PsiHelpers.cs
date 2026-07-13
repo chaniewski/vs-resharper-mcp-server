@@ -9,6 +9,7 @@ using JetBrains.ReSharper.Psi;
 using JetBrains.ReSharper.Psi.Caches;
 using JetBrains.ReSharper.Psi.CSharp;
 using JetBrains.ReSharper.Psi.CSharp.Tree;
+using JetBrains.ReSharper.Psi.CSharp.Util;
 using JetBrains.ReSharper.Psi.Files;
 using JetBrains.ReSharper.Psi.Tree;
 using JetBrains.Util.dataStructures.TypedIntrinsics;
@@ -519,12 +520,40 @@ namespace XC.VsResharperMcpServer.Core.Psi
 
             if (element is IModifiersOwner mod)
             {
-                if (mod.IsStatic) sb.Append("static ");
-                if (mod.IsAbstract) sb.Append("abstract ");
-                if (element is IMethod m)
+                // IClass.IsStatic is documented [Obsolete] in the SDK ("Type are always static
+                // members, use IsStaticClass() extension method instead") and unconditionally
+                // returns true for EVERY class - confirmed live 2026-07-13: a plain "public class
+                // Foo" was reported as "static class Foo" by this tool. The same IModifiersOwner.
+                // IsStatic getter is inherited by every other type kind too (struct/interface/
+                // enum/delegate), which can never legitimately be "static" in C# at all, so it's
+                // equally meaningless there - never trust it for a type. IsAbstract has a related,
+                // subtler wrinkle for classes specifically: the C# compiler encodes "static class"
+                // as IL abstract+sealed, so IsAbstract is ALSO true for a static class even though
+                // the source never wrote "abstract" - confirmed live ("public static class Foo"
+                // reported as "static abstract class Foo"). Neither wrinkle affects MEMBERS
+                // (methods/fields/properties/etc), where IsStatic/IsAbstract were confirmed
+                // correct against the real keyword - only the type-declaration case is special-cased below.
+                if (element is ITypeElement)
                 {
-                    if (m.IsVirtual) sb.Append("virtual ");
-                    if (m.IsOverride) sb.Append("override ");
+                    if (element is IClass classElement)
+                    {
+                        if (CSharpDeclaredElementUtil.IsStaticClass(classElement))
+                            sb.Append("static ");
+                        else if (mod.IsAbstract)
+                            sb.Append("abstract ");
+                    }
+                    // IStruct/IInterface/IEnum/IDelegate: static/abstract are pure IL-encoding
+                    // artifacts of the type kind here, never a real source keyword - print neither.
+                }
+                else
+                {
+                    if (mod.IsStatic) sb.Append("static ");
+                    if (mod.IsAbstract) sb.Append("abstract ");
+                    if (element is IMethod m)
+                    {
+                        if (m.IsVirtual) sb.Append("virtual ");
+                        if (m.IsOverride) sb.Append("override ");
+                    }
                 }
             }
 
