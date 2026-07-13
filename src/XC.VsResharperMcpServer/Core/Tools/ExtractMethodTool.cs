@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using JetBrains.Application.Progress;
 using JetBrains.Application.Threading;
@@ -13,6 +14,7 @@ using JetBrains.ReSharper.Psi;
 using JetBrains.ReSharper.Psi.CSharp.Util;
 using JetBrains.ReSharper.Psi.Transactions;
 using JetBrains.ReSharper.Refactorings.CSharp.ExtractMethod2.Common;
+using JetBrains.ReSharper.Refactorings.CSharp.ExtractMethod2.ControlFlow;
 using JetBrains.ReSharper.Refactorings.CSharp.ExtractMethod2.FromStatements;
 using JetBrains.ReSharper.Refactorings.ExtractMethod2;
 using JetBrains.Util;
@@ -71,6 +73,22 @@ namespace XC.VsResharperMcpServer.Core.Tools
     // (ExtractedEntityKind.MethodObject, which GetOccurrences never appears to surface for a plain
     // statement-range selection based on the decompiled source - only Method/Property/LocalFunction/
     // ChainedConstructor are ever added to the occurrence list there).
+    //
+    // Wave-version fragility fix (2026-07-13, see docs/DEVNOTES.md): a real install on ReSharper
+    // 2025.3.2 (Wave 253) failed the Extension Manager's API Verifier with MethodNotFound/
+    // MethodReducingVisibility errors on exactly the three SDK symbols this tool calls directly -
+    // and because the API Verifier is all-or-nothing per package, that took down the WHOLE plugin's
+    // install, not just this one tool. Decompiling the actual Wave 253 build confirmed all three
+    // still exist there, just under a different shape: AnalyzeDataFlow() was spelled
+    // AnalizeDataFlow() (a typo later fixed upstream), GetOccurrences(...) is private there vs.
+    // public on Wave 261, and CSharpExtractMethodModel's constructor takes an extra Lifetime
+    // parameter that Wave 261 dropped. A hard compile-time reference to any one shape is what the
+    // verifier's static metadata walk flags - so AnalyzeDataFlowCompat/GetOccurrencesCompat/
+    // CreateExtractMethodModelCompat below call through reflection instead, which removes the
+    // literal MethodRef/ctor-ref tokens from this assembly's metadata entirely. This keeps
+    // extract_method fully working on BOTH shapes (confirmed by the decompiled signatures on each
+    // Wave), and degrades to a clear runtime error instead of a dead install if some future Wave
+    // changes the shape again in a way these helpers don't already tolerate.
     public class ExtractMethodTool
     {
         private readonly ISolution _solution;
@@ -141,11 +159,24 @@ namespace XC.VsResharperMcpServer.Core.Tools
                     return "Extract Method is not available for this statement range (not inside a member, " +
                            "or the selection can't be safely extracted).";
 
-                var analysisResult = workflow.AnalyzeDataFlow();
-                if (analysisResult == null)
-                    return "Control-flow analysis failed for this statement range - cannot extract.";
+                ICSharpExtractMethodControlFlowInspectionResult analysisResult;
+                ExtractMethodPopupOccurrence[] occurrences;
+                CSharpExtractMethodModel model;
+                try
+                {
+                    analysisResult = AnalyzeDataFlowCompat(workflow);
+                    if (analysisResult == null)
+                        return "Control-flow analysis failed for this statement range - cannot extract.";
 
-                var occurrences = workflow.GetOccurrences(analysisResult);
+                    occurrences = GetOccurrencesCompat(workflow, analysisResult);
+                }
+                catch (MissingMethodException ex)
+                {
+                    return "extract_method is unavailable on this ReSharper build - its internal SDK API " +
+                           "shape wasn't recognized (see docs/DEVNOTES.md). Every other tool is unaffected. " +
+                           $"Detail: {ex.Message}";
+                }
+
                 if (occurrences.Length == 0)
                     return "No extractable occurrence found for this statement range.";
 
@@ -158,8 +189,16 @@ namespace XC.VsResharperMcpServer.Core.Tools
                 if (psiSourceFile == null)
                     return "Could not resolve the source file that owns the selected statements.";
 
-                var model = new CSharpExtractMethodModel(workflow, analysisResult, workflow.SelectedRange,
-                    workflow.TargetSiteContext, psiSourceFile, chosen.EntityKind);
+                try
+                {
+                    model = CreateExtractMethodModelCompat(workflow, analysisResult, workflow.SelectedRange,
+                        workflow.TargetSiteContext, psiSourceFile, chosen.EntityKind, lifetime);
+                }
+                catch (MissingMethodException ex)
+                {
+                    return "extract_method is unavailable on this ReSharper build - CSharpExtractMethodModel's " +
+                           $"constructor shape wasn't recognized (see docs/DEVNOTES.md). Detail: {ex.Message}";
+                }
                 workflow.AssignModel(model);
 
                 // Matches CSharpExtractMethodWorkflowBase.FirstPendingRefactoringPage's page-factory
@@ -285,6 +324,72 @@ namespace XC.VsResharperMcpServer.Core.Tools
         {
             try { return conflict.IsValid; }
             catch { return false; }
+        }
+
+        // Reflection-based compat shims - see the class doc comment's "Wave-version fragility fix"
+        // note for why these exist instead of direct calls/a direct constructor invocation.
+
+        private static ICSharpExtractMethodControlFlowInspectionResult AnalyzeDataFlowCompat(
+            CSharpExtractMethodFromStatementsWorkflow workflow)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            var method = workflow.GetType().GetMethod("AnalyzeDataFlow", flags, null, Type.EmptyTypes, null)
+                ?? workflow.GetType().GetMethod("AnalizeDataFlow", flags, null, Type.EmptyTypes, null);
+            if (method == null)
+                throw new MissingMethodException(
+                    "CSharpExtractMethodWorkflowBase.AnalyzeDataFlow()/AnalizeDataFlow() not found.");
+            return (ICSharpExtractMethodControlFlowInspectionResult)method.Invoke(workflow, null);
+        }
+
+        private static ExtractMethodPopupOccurrence[] GetOccurrencesCompat(
+            CSharpExtractMethodFromStatementsWorkflow workflow, ICSharpExtractMethodControlFlowInspectionResult analysisResult)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            var method = workflow.GetType().GetMethod("GetOccurrences", flags, null,
+                new[] { typeof(ICSharpExtractMethodControlFlowInspectionResult) }, null);
+            if (method == null)
+                throw new MissingMethodException("CSharpExtractMethodWorkflowBase.GetOccurrences(...) not found.");
+            return (ExtractMethodPopupOccurrence[])method.Invoke(workflow, new object[] { analysisResult });
+        }
+
+        // CSharpExtractMethodModel's constructor shape differs across Waves (an extra Lifetime
+        // parameter on Wave 253 that Wave 261 dropped - see class doc comment). Rather than hardcode
+        // either shape, this matches each of the constructor's declared parameter TYPES against our
+        // known argument values (each a distinct type, so type-directed matching is unambiguous) -
+        // tolerates the known param being inserted/removed/reordered, not just the one Wave 253 case.
+        private static CSharpExtractMethodModel CreateExtractMethodModelCompat(
+            IExtractMethodWorkflow workflow, ICSharpExtractMethodControlFlowInspectionResult analysisResult,
+            ITreeRange selectedRange, ICSharpExtractMethodTargetSiteContext targetSiteContext,
+            IPsiSourceFile psiSourceFile, ExtractedEntityKind kind, Lifetime lifetime)
+        {
+            object[] knownArgs = { workflow, analysisResult, selectedRange, targetSiteContext, psiSourceFile, kind, lifetime };
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+
+            foreach (var ctor in typeof(CSharpExtractMethodModel).GetConstructors(flags))
+            {
+                var parameters = ctor.GetParameters();
+                var args = new object[parameters.Length];
+                var used = new bool[knownArgs.Length];
+                var matched = true;
+
+                for (var i = 0; i < parameters.Length && matched; i++)
+                {
+                    matched = false;
+                    for (var j = 0; j < knownArgs.Length; j++)
+                    {
+                        if (used[j] || !parameters[i].ParameterType.IsInstanceOfType(knownArgs[j])) continue;
+                        args[i] = knownArgs[j];
+                        used[j] = true;
+                        matched = true;
+                        break;
+                    }
+                }
+
+                if (matched)
+                    return (CSharpExtractMethodModel)ctor.Invoke(args);
+            }
+
+            throw new MissingMethodException("CSharpExtractMethodModel's constructor shape wasn't recognized.");
         }
 
         // CSharpExtractMethodWorkflowBase.Model has a protected setter (see class doc comment) - this

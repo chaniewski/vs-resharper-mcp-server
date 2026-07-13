@@ -2,7 +2,7 @@
 <package>
   <metadata>
     <id>XC.VsResharperMcpServer</id>
-    <version>1.1.1</version>
+    <version>1.1.2</version>
     <authors>Michal Chaniewski</authors>
     <description>A Visual Studio-hosted ReSharper plugin that exposes ReSharper's PSI code intelligence (find usages, go to definition, rename, diagnostics, quick-fixes, refactorings, and more) to Claude Code and other MCP clients over an embedded local HTTP JSON-RPC server.</description>
     <projectUrl>https://github.com/chaniewski/vs-resharper-mcp-server</projectUrl>
