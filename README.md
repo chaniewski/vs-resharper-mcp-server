@@ -19,11 +19,11 @@ Status: 1.0.0. 29 tools covering find/navigate/inspect/refactor/write workflows,
 
 Builds `src\XC.VsResharperMcpServer` and packs it to `dist\XC.VsResharperMcpServer.<version>.nupkg`.
 
-## Installing (local dev)
+## Installing
 
 Via ReSharper's own Extension Manager (not Visual Studio's Extensions manager):
 
-1. **ReSharper → Options → Environment → Extension Manager**, click **Add**, point it at the repo's `dist\` folder as a local source.
+1. **ReSharper → Options → Environment → Extension Manager**, click **Add**, point it at the repo's `dist\` folder as a local source (when built locally) or the download folder of the release package (when downloaded pre-built .nuget package).
 2. **ReSharper → Extension Manager**, select that source, install `XC.VsResharperMcpServer`, restart Visual Studio.
 3. Open any solution. A status bar indicator (`R# MCP: <port>`) confirms the server is running and shows which port it bound to. For scripted verification, check the per-instance marker file instead of grepping logs:
    ```powershell
