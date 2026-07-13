@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using JetBrains.Application.DataContext;
+using JetBrains.Application.FileSystemTracker;
 using JetBrains.Application.Parts;
 using JetBrains.Application.Threading;
 using JetBrains.DocumentManagers;
@@ -51,6 +52,7 @@ namespace XC.VsResharperMcpServer.Host
             DataContexts dataContexts,
             ITextControlManager textControlManager,
             DocumentManager documentManager,
+            IFileSystemTracker fileSystemTracker,
             ILogger logger)
         {
             _logger = logger;
@@ -95,7 +97,7 @@ namespace XC.VsResharperMcpServer.Host
             var applyQuickFix = new ApplyQuickFixTool(solution, shellLocks);
             var applySuggestions = new ApplySuggestionsTool(solution, shellLocks);
             var completeAt = new CompleteAtTool(solution, shellLocks);
-            var syncFileFromDisk = new SyncFileFromDiskTool(solution, shellLocks);
+            var syncFileFromDisk = new SyncFileFromDiskTool(solution, shellLocks, fileSystemTracker);
             var inlineVariable = new InlineVariableTool(solution, shellLocks, dataContexts, textControlManager);
             var changeSignature = new ChangeSignatureTool(solution, shellLocks);
             var generateXmlDoc = new GenerateXmlDocTool(solution, shellLocks);
@@ -449,8 +451,13 @@ namespace XC.VsResharperMcpServer.Host
                             "write tools - through your own file-editing tools) and BEFORE using any other tool " +
                             "against that file. Skipping this step means every other tool in this server " +
                             "(find_usages, rename_symbol, get_diagnostics, etc.) may silently operate on stale, " +
-                            "pre-edit content. Accepts a single 'filePath' or a 'filePaths' array to sync several " +
-                            "files (e.g. every file touched by a multi-file edit) in one call."
+                            "pre-edit content. Also handles a brand-new file that doesn't exist in the project yet " +
+                            "(e.g. just created by an external tool) - forces the same project-model resync the " +
+                            "platform normally only does on VS window focus-regain, waiting up to 3s for the file " +
+                            "to become visible before falling back to 'File not found in solution' if it still " +
+                            "isn't (e.g. the file's directory isn't actually covered by the project's includes). " +
+                            "Accepts a single 'filePath' or a 'filePaths' array to sync several files (e.g. every " +
+                            "file touched by a multi-file edit) in one call."
                     })
             };
 

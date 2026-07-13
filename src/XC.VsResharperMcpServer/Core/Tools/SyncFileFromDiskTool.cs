@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using JetBrains.Application.FileSystemTracker;
 using JetBrains.Application.Threading;
 using JetBrains.DocumentModel;
 using JetBrains.ProjectModel;
@@ -32,15 +34,53 @@ namespace XC.VsResharperMcpServer.Core.Tools
     {
         private readonly ISolution _solution;
         private readonly IShellLocks _shellLocks;
+        private readonly IFileSystemTracker _fileSystemTracker;
 
-        public SyncFileFromDiskTool(ISolution solution, IShellLocks shellLocks)
+        public SyncFileFromDiskTool(ISolution solution, IShellLocks shellLocks, IFileSystemTracker fileSystemTracker)
         {
             _solution = solution;
             _shellLocks = shellLocks;
+            _fileSystemTracker = fileSystemTracker;
         }
 
         public string Execute(string filePath = null, string[] filePaths = null)
         {
+            var paths = new List<string>();
+            if (!string.IsNullOrEmpty(filePath)) paths.Add(filePath);
+            if (filePaths != null) paths.AddRange(filePaths.Where(p => !string.IsNullOrEmpty(p)));
+            paths = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+            // Brand-new files created outside VS (e.g. by an external editor) aren't just PSI-stale -
+            // they're not in the project model AT ALL yet (PsiHelpers.ResolveFile walks
+            // solution.GetAllProjects()...GetAllProjectFiles(), which won't contain a file the platform
+            // hasn't noticed on disk). Known live gap (2026-07-13): the platform's own VS-hierarchy-to-
+            // ReSharper-project-model bridge (JetBrains.VsIntegration.ProjectDocuments.Projects.Builder.
+            // ProjectModelSynchronizer, decompiled from JetBrains.Platform.VisualStudio.Core.dll) only
+            // reliably notices new glob-included files on window-focus-regain - the SAME
+            // SuspendFileSystemTrackerWhenInactive mechanism already root-caused for PSI staleness (see
+            // the 0.8.0 DEVNOTES entry). The exact trigger the platform's own VsFileSystemSynchronizer
+            // fires on focus-regain is IFileSystemTracker.CommitChanges(null) - a fully public SDK
+            // interface (JetBrains.Application.FileSystemTracker.IFileSystemTracker), not an internal/
+            // reflection-based poke like the earlier abandoned attempt to flip
+            // SuspendFileSystemTrackerWhenInactive directly. Firing it here reproduces the same trigger
+            // on demand instead of requiring a real alt-tab.
+            //
+            // CommitChanges is documented as queuing an async commit on a separate thread - the
+            // resulting project-model update needs to acquire PSI locks to apply, so this whole
+            // check-trigger-poll sequence runs OUTSIDE any lock this tool holds (via the existing
+            // lock-safe ExecuteRead dispatcher) to avoid a self-deadlock: if we held a write lock while
+            // polling for the effect of an update that itself needs a lock to complete, neither side
+            // could ever proceed.
+            var stillUnresolved = paths.Where(p => IsUnresolved(p)).ToList();
+            if (stillUnresolved.Count > 0)
+            {
+                _fileSystemTracker.CommitChanges(null);
+
+                var deadline = DateTime.UtcNow.AddSeconds(3);
+                while (DateTime.UtcNow < deadline && stillUnresolved.Any(IsUnresolved))
+                    Thread.Sleep(250);
+            }
+
             // Self-transacting, not ExecuteWrite: this tool deliberately calls MarkAsDirty/
             // InvalidatePsiFilesCache to mark the file as needing a reparse, which is fundamentally
             // incompatible with ExecuteWrite's outer PsiTransactionCookie.CreateAutoCommitCookieWithCachesUpdate
@@ -51,6 +91,10 @@ namespace XC.VsResharperMcpServer.Core.Tools
             return PsiThreadDispatcher.ExecuteSelfTransactingWrite(_shellLocks, _solution, "XC.VsResharperMcpServer.sync_file_from_disk", () =>
                 ExecuteCore(filePath, filePaths));
         }
+
+        private bool IsUnresolved(string path) =>
+            PsiThreadDispatcher.ExecuteRead(_shellLocks, _solution, "XC.VsResharperMcpServer.sync_file_from_disk.resolve_check",
+                () => PsiHelpers.GetSourceFile(_solution, path) == null);
 
         private string ExecuteCore(string filePath, string[] filePaths)
         {
