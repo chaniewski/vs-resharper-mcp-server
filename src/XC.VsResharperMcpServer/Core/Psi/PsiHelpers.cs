@@ -474,14 +474,18 @@ namespace XC.VsResharperMcpServer.Core.Psi
             return ((int)coords.Line + 1, (int)coords.Column + 1);
         }
 
-        // Explicitly flushes a mutated in-memory document to its backing file. Needed because
-        // apply_quick_fix/apply_suggestions mutate an IDocument via a synthetic ITextControl or an
-        // IModernManualScopedAction (neither goes through a PsiTransactionCookie the way
-        // rename_symbol/generate_members/format_file do), and neither path actually writes the
-        // change to disk on its own in a headless host - PSI's cache reflects the edit (diagnostics,
-        // symbol info) but the physical file is untouched, and the tool would otherwise silently
-        // misreport success on a change nothing outside PSI can see. Preserves the original file's
-        // BOM/no-BOM choice so this doesn't introduce a spurious encoding-only diff.
+        // Explicitly flushes a mutated in-memory document to its backing file. Originally added
+        // because apply_quick_fix/apply_suggestions mutate an IDocument via a synthetic ITextControl
+        // or an IModernManualScopedAction (neither goes through a PsiTransactionCookie the way
+        // rename_symbol/generate_members/format_file do) and never write to disk on their own in a
+        // headless host. PsiTransactionCookie-based tools are NOT exempt from this either, though:
+        // live-verified 2026-07-13 that rename_symbol's cascading rename correctly updates the
+        // IDocument for a file already open in a live VS editor tab (the editor shows the new name
+        // immediately, tab marked dirty) but does NOT flush that file to disk - only files with no
+        // open editor got auto-persisted by the transaction commit. Any PSI-transaction-based write
+        // tool touching multiple files should call this for every changed file, not just assume the
+        // transaction's own commit reaches disk. Preserves the original file's BOM/no-BOM choice so
+        // this doesn't introduce a spurious encoding-only diff.
         public static void PersistDocumentToDisk(string filePath, string text)
         {
             var hasBom = false;

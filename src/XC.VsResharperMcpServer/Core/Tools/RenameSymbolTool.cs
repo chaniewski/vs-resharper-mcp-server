@@ -133,7 +133,11 @@ namespace XC.VsResharperMcpServer.Core.Tools
                     var conflicts = ExtractConflicts(driver);
                     var changedFiles = CollectChangedFiles(dataModel, declarationFiles);
 
-                    return FormatResult(oldName, newName, dryRun, executed, conflicts, changedFiles);
+                    var persistWarnings = !dryRun && executed
+                        ? PersistChangedFiles(changedFiles)
+                        : new List<string>();
+
+                    return FormatResult(oldName, newName, dryRun, executed, conflicts, changedFiles, persistWarnings);
                 }
             }
             finally
@@ -143,7 +147,8 @@ namespace XC.VsResharperMcpServer.Core.Tools
         }
 
         private static string FormatResult(string oldName, string newName, bool dryRun, bool executed,
-            List<(string message, string severity, bool isValid)> conflicts, List<string> changedFiles)
+            List<(string message, string severity, bool isValid)> conflicts, List<string> changedFiles,
+            List<string> persistWarnings)
         {
             var sb = new StringBuilder();
             sb.Append(dryRun ? "[dry run] " : "").Append(oldName).Append(" -> ").Append(newName)
@@ -165,7 +170,44 @@ namespace XC.VsResharperMcpServer.Core.Tools
                     sb.Append("  ").AppendLine(f);
             }
 
+            if (persistWarnings.Count > 0)
+            {
+                sb.AppendLine();
+                sb.Append("WARNING: failed to persist ").Append(persistWarnings.Count).AppendLine(" file(s) to disk:");
+                foreach (var w in persistWarnings)
+                    sb.Append("  ").AppendLine(w);
+            }
+
             return sb.ToString().TrimEnd();
+        }
+
+        // Explicitly flushes every changed file's current IDocument text to disk after a real
+        // (non-dry-run) apply. Needed because a file open in a live VS editor tab has its own
+        // ITextControl/WpfTextViewHost bound to the IDocument - the rename transaction correctly
+        // mutates that IDocument (the editor reflects the new name immediately, live-verified
+        // 2026-07-13), but VS does not auto-save an open, dirty buffer to disk on its own. Files
+        // NOT open in an editor are typically already flushed by the PSI transaction's own commit,
+        // so re-writing them here is redundant but harmless (same content, same encoding). Mirrors
+        // PsiHelpers.PersistDocumentToDisk's existing use in apply_quick_fix/apply_suggestions.
+        private List<string> PersistChangedFiles(List<string> changedFiles)
+        {
+            var warnings = new List<string>();
+            foreach (var path in changedFiles)
+            {
+                try
+                {
+                    var sourceFile = PsiHelpers.GetSourceFile(_solution, path);
+                    var text = sourceFile?.Document?.GetText();
+                    if (text == null) continue;
+
+                    PsiHelpers.PersistDocumentToDisk(path, text);
+                }
+                catch (Exception ex)
+                {
+                    warnings.Add($"{path}: {ex.Message}");
+                }
+            }
+            return warnings;
         }
 
         private static List<(string message, string severity, bool isValid)> ExtractConflicts(RefactoringDriverWithConflicts driver)
@@ -201,6 +243,31 @@ namespace XC.VsResharperMcpServer.Core.Tools
                 {
                     var primary = atomic.PrimaryDeclaredElement;
                     if (primary == null) continue;
+
+                    // Each atomic rename's OWN declaration site must be counted too, not just its
+                    // reference sites below - live-verified 2026-07-13: a cascading rename across a
+                    // 46-implementer interface correctly renamed every implementer's declaration on
+                    // disk, but this method previously reported only 3 files (the originally-clicked
+                    // symbol's own declaration + reference sites), because GetGroupedElementReferences
+                    // returns USAGE sites of an atomic's primary element, not its declaration - an
+                    // implementer overriding the interface member with no direct external caller (the
+                    // common case; it's reached via the interface, not a concrete-type call site) never
+                    // appeared in the report at all despite being renamed correctly on disk. This is
+                    // what made the cascade look like it silently failed.
+                    try
+                    {
+                        foreach (var declaration in primary.GetDeclarations())
+                        {
+                            var path = declaration.GetSourceFile()?.GetLocation().FullPath;
+                            if (!string.IsNullOrEmpty(path))
+                                files.Add(path);
+                        }
+                    }
+                    catch
+                    {
+                        // Best-effort: a single atomic's declaration enumeration failing should not
+                        // sink the whole report.
+                    }
 
                     try
                     {
